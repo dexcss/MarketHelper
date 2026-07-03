@@ -6,7 +6,7 @@ on:
       - 'v*'   # push a tag like v1.11.0.0 to trigger a release
 
 permissions:
-  contents: write
+  contents: write   # needed to create the GitHub Release
 
 jobs:
   build:
@@ -32,19 +32,44 @@ jobs:
       - name: Build
         run: dotnet build MarketHelper/MarketHelper.csproj -c Release --no-restore
 
+      # Clean the build output down to just what ships.
+      - name: Clean output
+        run: |
+          $out = "MarketHelper/bin/Release"
+
+          # Remove DalamudPackager's packaged subfolder (named after the assembly).
+          $pkg = Join-Path $out "MarketHelper"
+          if (Test-Path $pkg) { Remove-Item $pkg -Recurse -Force; Write-Host "Removed nested packager folder." }
+
+          # Trim runtimes to win-x64 only.
+          $rt = Join-Path $out "runtimes"
+          if (Test-Path $rt) {
+            Get-ChildItem $rt -Directory | Where-Object { $_.Name -ne 'win-x64' } | Remove-Item -Recurse -Force
+            Write-Host "Trimmed runtimes to win-x64."
+          }
+
+          # Drop debug symbols and any leftover zips.
+          Get-ChildItem $out -Filter *.pdb -ErrorAction SilentlyContinue | Remove-Item -Force
+          Get-ChildItem $out -Filter *.zip -ErrorAction SilentlyContinue | Remove-Item -Force
+
+          # Newtonsoft.Json is provided by Dalamud at runtime; don't ship our own copy.
+          $njson = Join-Path $out "Newtonsoft.Json.dll"
+          if (Test-Path $njson) { Remove-Item $njson -Force; Write-Host "Removed bundled Newtonsoft.Json." }
+
+          Write-Host "Remaining top-level items:"
+          Get-ChildItem $out | ForEach-Object { Write-Host "  $($_.Name)" }
+        shell: pwsh
+
       - name: Package
         run: |
           $out = "MarketHelper/bin/Release"
-          # DalamudPackager emits the plugin zip; ensure our named zip exists.
-          $built = Get-ChildItem -Path $out -Recurse -Filter "MarketHelper.zip" | Select-Object -First 1
-          if ($null -eq $built) {
-            Write-Error "MarketHelper.zip not produced by build"
-            exit 1
-          }
-          Copy-Item $built.FullName -Destination "MarketHelper.zip" -Force
+          Compress-Archive -Path "$out/*" -DestinationPath "$out/MarketHelper.zip" -Force
+          $size = (Get-Item "$out/MarketHelper.zip").Length / 1MB
+          Write-Host ("Final zip size: {0:N1} MB" -f $size)
         shell: pwsh
 
-      - name: Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: MarketHelper.zip
+          files: MarketHelper/bin/Release/MarketHelper.zip
+          generate_release_notes: true

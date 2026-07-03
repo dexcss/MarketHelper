@@ -30,7 +30,7 @@ Search any marketable item and compare prices across Japan, America, Europe and 
 Add this URL to Dalamud's custom plugin repositories (`/xlsettings` → Experimental → Custom Plugin Repositories):
 
 ```
-https://raw.githubusercontent.com/dexcss/MarketHelper/main/repo.json
+https://raw.githubusercontent.com/dexcss/DalamudPlugins/main/repo.json
 ```
 
 Then find **Market Helper** in the plugin installer.
