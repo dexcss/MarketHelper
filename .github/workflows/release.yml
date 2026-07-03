@@ -1,0 +1,50 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'   # push a tag like v1.11.0.0 to trigger a release
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download Dalamud
+        run: |
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
+          Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+        shell: pwsh
+
+      - name: Restore
+        run: dotnet restore MarketHelper/MarketHelper.csproj
+
+      - name: Build
+        run: dotnet build MarketHelper/MarketHelper.csproj -c Release --no-restore
+
+      - name: Package
+        run: |
+          $out = "MarketHelper/bin/Release"
+          # DalamudPackager emits the plugin zip; ensure our named zip exists.
+          $built = Get-ChildItem -Path $out -Recurse -Filter "MarketHelper.zip" | Select-Object -First 1
+          if ($null -eq $built) {
+            Write-Error "MarketHelper.zip not produced by build"
+            exit 1
+          }
+          Copy-Item $built.FullName -Destination "MarketHelper.zip" -Force
+        shell: pwsh
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MarketHelper.zip
