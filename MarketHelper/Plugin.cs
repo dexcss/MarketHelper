@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Dalamud.Game.Command;
 using Dalamud.IoC;
 using Dalamud.Plugin;
@@ -24,6 +25,28 @@ public sealed class Plugin : IDalamudPlugin
     public MarketListener Listener { get; }
     public NavRunner Nav { get; }
     public ListRunner Lister { get; }
+    public AutoRetainerBridge ArBridge { get; }
+
+    // Session-only Lister items (in memory; cleared automatically on plugin reload / game close,
+    // and via the manual "Clear session" button). Separate from Config.ListerItems (permanent).
+    public readonly List<uint> SessionListerItems = new();
+
+    /// <summary>Permanent + session items to auto-list, de-duplicated, in a stable order.</summary>
+    public List<uint> AllListerItems()
+    {
+        var all = new List<uint>(Config.ListerItems);
+        foreach (var id in SessionListerItems)
+            if (!all.Contains(id)) all.Add(id);
+        return all;
+    }
+
+    /// <summary>Remove a listed item from whichever list(s) hold it (session and/or permanent).</summary>
+    public void RemoveListerItem(uint id)
+    {
+        var changed = Config.ListerItems.Remove(id);
+        SessionListerItems.Remove(id);
+        if (changed) Config.Save();
+    }
 
     private readonly WindowSystem _windows = new("MarketHelper");
     private readonly MainWindow _mainWindow;
@@ -40,6 +63,8 @@ public sealed class Plugin : IDalamudPlugin
         Listener = new MarketListener(this);
         Nav = new NavRunner(this);
         Lister = new ListRunner(this);
+        ArBridge = new AutoRetainerBridge(this);
+        if (Config.AutoRetainerIntegration) ArBridge.Enable();
 
         _mainWindow = new MainWindow(this);
         _windows.AddWindow(_mainWindow);
@@ -115,6 +140,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi -= OpenMain;
         PluginInterface.UiBuilder.OpenConfigUi -= OpenMain;
         _windows.RemoveAllWindows();
+        ArBridge.Dispose();
         CommandManager.RemoveHandler(Command);
         foreach (var alias in OpenAliases)
             CommandManager.RemoveHandler(alias);

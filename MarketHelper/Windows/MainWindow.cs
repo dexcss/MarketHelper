@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
@@ -142,6 +143,47 @@ public partial class MainWindow : Window
         ImGui.TextDisabled("(?)");
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(text);
+    }
+
+    // Per-list transient input buffers for DrawStringListEditor, keyed by id.
+    private readonly Dictionary<string, string> _listInputs = new();
+
+    /// <summary>
+    /// Editable list of strings: shows each entry with a remove button, a text field to add one,
+    /// and optionally an "add current" button that pulls a value from a supplier.
+    /// </summary>
+    private void DrawStringListEditor(List<string> list, string id, string? addCurrentLabel, Func<string>? addCurrent)
+    {
+        string? remove = null;
+        foreach (var entry in list)
+        {
+            if (ImGui.SmallButton($"x##{id}rm{entry}")) remove = entry;
+            ImGui.SameLine();
+            ImGui.Text(entry);
+        }
+        if (remove != null) { list.Remove(remove); Cfg.Save(); }
+
+        var buf = _listInputs.TryGetValue(id, out var b) ? b : string.Empty;
+        ImGui.SetNextItemWidth(SW(180));
+        if (ImGui.InputTextWithHint($"##{id}add", "type a name, Enter to add", ref buf, 64,
+                ImGuiInputTextFlags.EnterReturnsTrue))
+        {
+            var v = buf.Trim();
+            if (v.Length > 0 && !list.Contains(v)) { list.Add(v); Cfg.Save(); }
+            buf = string.Empty;
+        }
+        _listInputs[id] = buf;
+
+        if (addCurrentLabel != null && addCurrent != null)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button($"{addCurrentLabel}##{id}cur"))
+            {
+                var v = addCurrent();
+                if (!string.IsNullOrEmpty(v) && !list.Contains(v)) { list.Add(v); Cfg.Save(); }
+            }
+        }
+        Dummy(2f);
     }
 
     /// <summary>A scaled separator with padding above and below.</summary>

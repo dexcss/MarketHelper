@@ -98,6 +98,44 @@ public partial class MainWindow
 
         Divider();
 
+        var arInt = Cfg.AutoRetainerIntegration;
+        if (ImGui.Checkbox("Undercut during AutoRetainer multi-mode", ref arInt))
+        {
+            Cfg.AutoRetainerIntegration = arInt;
+            changed = true;
+            if (arInt) _plugin.ArBridge.Enable();
+            else _plugin.ArBridge.Disable();
+        }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("When AutoRetainer's multi-mode opens each retainer, Market Helper undercuts that retainer's market listings before AutoRetainer sends ventures. AutoRetainer waits for the undercut to finish, so it won't conflict with venture sending. Requires AutoRetainer installed.");
+        if (Cfg.AutoRetainerIntegration)
+        {
+            ImGui.Indent(SW(10));
+            ImGui.TextColored(_plugin.ArBridge.AutoRetainerReady ? Green : Red,
+                _plugin.ArBridge.AutoRetainerReady ? "AutoRetainer detected." : "AutoRetainer not detected — install/enable it.");
+
+            // Auto-list preset items during the AR cycle.
+            var arList = Cfg.ArAutoList;
+            if (ImGui.Checkbox("Also auto-list my preset items (from the Lister)", ref arList))
+            { Cfg.ArAutoList = arList; changed = true; }
+            ImGui.SameLine(0, SW(6));
+            HelpMarker("During AutoRetainer's cycle, after undercutting, also list any items from the Lister tab's list that are found in inventory (respecting the 20-slot cap). This WRITES new market listings — set up and dry-run your Lister list first.");
+
+            // Character allow-list.
+            ImGui.Spacing();
+            ImGui.TextColored(Grey, "Only these characters (blank = all):");
+            DrawStringListEditor(Cfg.ArOnlyCharacters, "arChar", "Add current character",
+                () => ECommons.GameHelpers.Player.Available ? ECommons.GameHelpers.Player.Name : string.Empty);
+
+            // Retainer allow-list.
+            ImGui.TextColored(Grey, "Only these retainers (blank = all):");
+            DrawStringListEditor(Cfg.ArOnlyRetainers, "arRet", null, null);
+
+            ImGui.Unindent(SW(10));
+        }
+
+        Divider();
+
         var verbose = Cfg.Verbose;
         if (ImGui.Checkbox("Verbose chat output", ref verbose))
         { Cfg.Verbose = verbose; changed = true; }

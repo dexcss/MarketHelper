@@ -26,6 +26,7 @@ public enum NavState
     Price,
     WaitPriceClose,
     CloseRetainer,
+    PostprocessBackout,
     WaitClosed,
     Done,
     Error,
@@ -67,6 +68,12 @@ public sealed class NavRunner
     private string _nameProbe = string.Empty;
     private bool _closeActed;   // fired an exit action this close-cycle; wait before acting again
 
+    // AutoRetainer postprocess mode: AR has already opened a retainer; we only price the currently
+    // open retainer's items, then return the UI to the SelectString menu and signal AR via the
+    // callback. We do NOT touch the bell, retainer selection, or Quit in this mode.
+    private bool _postprocessMode;
+    private Action? _onPostprocessDone;
+
     // Session price memory: once an item is searched and priced, remember the result so any
     // later identical item (same name + HQ) this run is set instantly without re-searching.
     // Mirrors the script's repeat behaviour, extended across the whole run. Cleared on Start.
@@ -100,6 +107,43 @@ public sealed class NavRunner
     {
         State = NavState.Idle;
         Status = "Stopped.";
+    }
+
+    /// <summary>
+    /// AutoRetainer integration entry point. AR has already summoned the bell and opened this
+    /// retainer (we're at its SelectString menu). Price only this retainer's listings, then return
+    /// to the SelectString menu and call onDone so AR can proceed to ventures. Never touches the
+    /// bell, retainer list, or Quit.
+    /// </summary>
+    public void StartPostprocess(string retainerName, Action onDone)
+    {
+        if (Running)
+        {
+            // Busy with a manual run — don't interfere; just release AR immediately.
+            onDone();
+            return;
+        }
+        Report.Clear();
+        _priceMemory.Clear();
+        _postprocessMode = true;
+        _onPostprocessDone = onDone;
+        _itemSlot = 0;
+        _ticks = 0;
+        Status = $"AutoRetainer: undercutting {retainerName}...";
+        Log($"AutoRetainer postprocess: undercutting {retainerName}.");
+        // AR leaves us at the retainer's SelectString menu; enter the sell-items screen.
+        State = NavState.EnterSellMenu;
+    }
+
+    /// <summary>Finish postprocess: return to SelectString (where AR resumes) and release AR.</summary>
+    private void EndPostprocess()
+    {
+        var done = _onPostprocessDone;
+        _postprocessMode = false;
+        _onPostprocessDone = null;
+        State = NavState.Idle;
+        Status = "Idle.";
+        done?.Invoke();
     }
 
     public void Tick()
@@ -226,7 +270,9 @@ public sealed class NavRunner
                 {
                     _ticks = 0;
                     _closeActed = false;
-                    State = NavState.CloseRetainer;
+                    // In AutoRetainer mode, return only to the SelectString menu (where AR resumes)
+                    // and release AR — do NOT Quit back to the retainer list.
+                    State = _postprocessMode ? NavState.PostprocessBackout : NavState.CloseRetainer;
                     return;
                 }
                 if (!Addons.IsReady("RetainerSellList")) { Wait(100); return; }
@@ -467,6 +513,40 @@ public sealed class NavRunner
                 State = NavState.NextItem;
                 break;
 
+            case NavState.PostprocessBackout:
+                // Return the UI to the retainer's SelectString menu (where AR handed it to us), then
+                // release AR. Close the sell list; AR takes over from the SelectString menu.
+                if (Now < _deadline) return;
+                if (Addons.AdvanceTalk()) { Wait(150); return; }
+                if (Addons.IsReady("SelectString"))
+                {
+                    Log("AutoRetainer postprocess done; handing back to AutoRetainer.");
+                    EndPostprocess();
+                    return;
+                }
+                if (Addons.IsVisible("RetainerSellList"))
+                {
+                    Addons.CloseAddon("RetainerSellList");
+                    Wait(500);
+                    return;
+                }
+                if (Addons.IsVisible("RetainerSell"))
+                {
+                    Addons.CloseAddon("RetainerSell");
+                    Wait(400);
+                    return;
+                }
+                _ticks++;
+                if (_ticks > 60)
+                {
+                    // Give up gracefully but STILL release AR so we never leave it hung.
+                    Log("AutoRetainer postprocess: couldn't cleanly return to menu; releasing anyway.");
+                    EndPostprocess();
+                    return;
+                }
+                Wait(200);
+                break;
+
             case NavState.CloseRetainer:
                 // Return to the retainer list. Fire the appropriate exit action ONCE, then wait
                 // patiently — the game takes a moment to close the retainer (you'll see "now selling
@@ -634,6 +714,14 @@ public sealed class NavRunner
         State = NavState.Error;
         Status = msg;
         _plugin.Chat($"[Market Helper] {msg}");
+        // Never leave AutoRetainer blocked waiting on us — release it even on failure.
+        if (_postprocessMode)
+        {
+            var done = _onPostprocessDone;
+            _postprocessMode = false;
+            _onPostprocessDone = null;
+            done?.Invoke();
+        }
     }
 
     private void Log(string msg)

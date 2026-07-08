@@ -11,29 +11,46 @@ namespace MarketHelper.Windows;
 public partial class MainWindow
 {
     private string _listerSearch = string.Empty;
+    private bool _addToSession = true;   // CTRL-add / search-add target: session (true) or permanent
+
+    private List<uint> AddTarget => _addToSession ? _plugin.SessionListerItems : Cfg.ListerItems;
+    private void AddListerItem(uint id)
+    {
+        // Don't add if it's already in EITHER list — an item should live in only one.
+        if (_plugin.SessionListerItems.Contains(id) || Cfg.ListerItems.Contains(id)) return;
+        AddTarget.Add(id);
+        if (!_addToSession) Cfg.Save();   // session list isn't persisted
+    }
 
     private void DrawListerTab()
     {
-        WrapText("Build a list of items to auto-list on the market. Hold CTRL and hover an item in your inventory (or anywhere its tooltip shows) to quick-add it. Then press Go to walk the bell and list them all at the lowest price.");
+        WrapText("Build a list of items to auto-list on the market. Hold CTRL and hover an item to quick-add it, or search below. Two lists: a permanent preset and a session list that clears when you reload. Press Go to walk the bell and list all of them.");
         Dummy(4f);
+
+        // Which list do adds go to?
+        ImGui.Text("Add to:");
+        ImGui.SameLine();
+        var toSession = _addToSession;
+        if (ImGui.RadioButton("Session", toSession)) _addToSession = true;
+        ImGui.SameLine();
+        if (ImGui.RadioButton("Permanent", !toSession)) _addToSession = false;
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Session items clear when the plugin reloads or the game closes (or via 'Clear session'). Permanent items are saved and persist. Both are listed when you press Go.");
 
         // --- CTRL quick-add (AutoRetainer's HoveredItem pattern) ---
         var ctrl = ImGui.GetIO().KeyCtrl;
         ImGui.TextColored(ctrl ? Green : Grey, ctrl
-            ? "CTRL held — hover an item to add it."
+            ? $"CTRL held — hover an item to add it to the {(_addToSession ? "session" : "permanent")} list."
             : "Hold CTRL and hover an item to quick-add.");
         if (ctrl && Svc.GameGui.HoveredItem > 0)
         {
             var id = (uint)(Svc.GameGui.HoveredItem % 1000000);
-            if (id > 0 && !Cfg.ListerItems.Contains(id))
+            if (id > 0)
             {
-                // Only add marketable items.
+                // Only add marketable items; AddListerItem rejects duplicates across both lists.
                 var hits = ItemSearch.FindById(id);
                 if (!string.IsNullOrEmpty(hits))
-                {
-                    Cfg.ListerItems.Add(id);
-                    Cfg.Save();
-                }
+                    AddListerItem(id);
             }
         }
 
@@ -51,7 +68,7 @@ public partial class MainWindow
                     {
                         if (ImGui.Selectable($"{h.Name}##add{h.Id}"))
                         {
-                            if (!Cfg.ListerItems.Contains(h.Id)) { Cfg.ListerItems.Add(h.Id); Cfg.Save(); }
+                            AddListerItem(h.Id);
                             _listerSearch = string.Empty;
                         }
                     }
@@ -99,34 +116,14 @@ public partial class MainWindow
         Dummy(4f);
         ImGui.Separator();
 
-        // --- The list ---
-        ImGui.Text($"Items to list ({Cfg.ListerItems.Count}):");
-        if (Cfg.ListerItems.Count == 0)
-        {
-            ImGui.TextColored(Grey, "Nothing queued yet.");
-        }
-        else
-        {
-            if (ImGui.BeginChild("##listeritems", new Vector2(0, SW(180)), true))
-            {
-                uint? remove = null;
-                foreach (var id in Cfg.ListerItems)
-                {
-                    var name = ItemSearch.FindById(id);
-                    if (string.IsNullOrEmpty(name)) name = $"Item #{id}";
-                    if (ImGui.SmallButton($"x##rm{id}")) remove = id;
-                    ImGui.SameLine();
-                    ImGui.Text(name);
-                }
-                if (remove.HasValue) { Cfg.ListerItems.Remove(remove.Value); Cfg.Save(); }
-            }
-            ImGui.EndChild();
-
-            if (ImGui.Button("Clear list", new Vector2(SW(120), 0))) { Cfg.ListerItems.Clear(); Cfg.Save(); }
-        }
+        // --- Session list ---
+        DrawItemList("Session list", _plugin.SessionListerItems, "sess", isSession: true);
+        // --- Permanent list ---
+        DrawItemList("Permanent list", Cfg.ListerItems, "perm", isSession: false);
 
         Dummy(6f);
         var lr = _plugin.Lister;
+        var totalItems = _plugin.AllListerItems().Count;
         if (lr.Running)
         {
             if (ImGui.Button("Stop", new Vector2(SW(120), 0))) lr.Stop();
@@ -135,7 +132,7 @@ public partial class MainWindow
         }
         else
         {
-            using (ImRaiiDisabled(Cfg.ListerItems.Count == 0))
+            using (ImRaiiDisabled(totalItems == 0))
             {
                 if (ImGui.Button("Dry run (preview only)", new Vector2(SW(200), 0)))
                     lr.Start(dryRun: true);
@@ -185,5 +182,36 @@ public partial class MainWindow
                 ImGui.EndCombo();
             }
         }
+    }
+
+    private void DrawItemList(string title, List<uint> list, string id, bool isSession)
+    {
+        ImGui.Text($"{title} ({list.Count}):");
+        if (list.Count == 0)
+        {
+            ImGui.TextColored(Grey, "  (empty)");
+        }
+        else
+        {
+            if (ImGui.BeginChild($"##items{id}", new Vector2(0, SW(130)), true))
+            {
+                uint? remove = null;
+                foreach (var itemId in list)
+                {
+                    var name = ItemSearch.FindById(itemId);
+                    if (string.IsNullOrEmpty(name)) name = $"Item #{itemId}";
+                    if (ImGui.SmallButton($"x##{id}rm{itemId}")) remove = itemId;
+                    ImGui.SameLine();
+                    ImGui.Text(name);
+                }
+                if (remove.HasValue) { list.Remove(remove.Value); if (!isSession) Cfg.Save(); }
+            }
+            ImGui.EndChild();
+
+            var clearLabel = isSession ? "Clear session" : "Clear permanent";
+            if (ImGui.Button($"{clearLabel}##{id}", new Vector2(SW(140), 0)))
+            { list.Clear(); if (!isSession) Cfg.Save(); }
+        }
+        Dummy(4f);
     }
 }

@@ -10,7 +10,7 @@ namespace MarketHelper;
 public enum ListState
 {
     Idle, FindBell, InteractBell, WaitRetainerList, NextRetainer, SelectRetainer, WaitSelectString,
-    OpenInventory, NextItem, BeginSell, WaitDryPrice, WaitSell, Price, WaitRealPrice, WaitClose, CloseRetainer, WaitClosed, Done, Error,
+    OpenInventory, NextItem, BeginSell, WaitDryPrice, WaitSell, Price, WaitRealPrice, WaitClose, CloseRetainer, PostprocessBackout, WaitClosed, Done, Error,
 }
 
 /// <summary>
@@ -62,6 +62,11 @@ public sealed class ListRunner
     private long _realPriceResult;
     private string? _realPriceNote;
 
+    // AutoRetainer postprocess mode: AR already has the retainer open; list preset items on THIS
+    // retainer only, then back out to SelectString and signal AR via the callback.
+    private bool _postprocessMode;
+    private Action? _onPostprocessDone;
+
     private static double Now => Environment.TickCount64;
     private bool AtBell => Svc.Condition[ConditionFlag.OccupiedSummoningBell];
 
@@ -69,7 +74,7 @@ public sealed class ListRunner
 
     public void Start(bool dryRun)
     {
-        if (Cfg.ListerItems.Count == 0) { SetError("No items queued."); return; }
+        if (_plugin.AllListerItems().Count == 0) { SetError("No items queued."); return; }
         DryRun = dryRun;
         Report.Clear();
         _dryListed.Clear();
@@ -78,6 +83,40 @@ public sealed class ListRunner
         Status = dryRun ? "Dry run: looking for bell..." : "Listing: looking for bell...";
         if (!dryRun)
             Log("Real listing uses the market-board 'Put Up for Sale' menu (selected by name — never the vendor 'Sell' option).");
+    }
+
+    /// <summary>
+    /// AutoRetainer integration: AR already opened this retainer (we're at its SelectString menu).
+    /// List any preset items found in inventory on this retainer only, then return to SelectString
+    /// and call onDone. Never touches the bell, retainer list, or Quit.
+    /// </summary>
+    public void StartPostprocess(string retainerName, Action onDone)
+    {
+        if (Running || _plugin.AllListerItems().Count == 0) { onDone(); return; }
+        DryRun = false;
+        _postprocessMode = true;
+        _onPostprocessDone = onDone;
+        Report.Clear();
+        _dryListed.Clear();
+        _ticks = 0;
+        // Build this retainer's queue and free-slot count, then enter the sell screen.
+        _queue.Clear();
+        _queue.AddRange(_plugin.AllListerItems());
+        var current = RetainerReader.ActiveMarketItems();
+        _slotsLeft = Math.Max(0, MaxListingsPerRetainer - current);
+        Log($"AutoRetainer auto-list: {retainerName}, {_slotsLeft} free slot(s).");
+        if (_slotsLeft == 0) { EndPostprocess(); return; }
+        State = ListState.OpenInventory;
+    }
+
+    private void EndPostprocess()
+    {
+        var done = _onPostprocessDone;
+        _postprocessMode = false;
+        _onPostprocessDone = null;
+        State = ListState.Idle;
+        Status = "Idle.";
+        done?.Invoke();
     }
 
     public void Stop() { State = ListState.Idle; Status = "Stopped."; }
@@ -111,7 +150,7 @@ public sealed class ListRunner
                 if (AtBell && Addons.IsVisible("RetainerList"))
                 {
                     _retainerCount = RetainerReader.Count;
-                    Log($"Bell open. {_retainerCount} retainer(s). {Cfg.ListerItems.Count} item(s) queued.");
+                    Log($"Bell open. {_retainerCount} retainer(s). {_plugin.AllListerItems().Count} item(s) queued.");
                     State = ListState.NextRetainer;
                     return;
                 }
@@ -123,8 +162,8 @@ public sealed class ListRunner
                 // Stop as soon as there's nothing left to list. Real mode removes listed items from
                 // the config queue; dry run tracks them in _dryListed. Check remaining accordingly.
                 var remaining = DryRun
-                    ? Cfg.ListerItems.Count(id => !_dryListed.Contains(id))
-                    : Cfg.ListerItems.Count;
+                    ? _plugin.AllListerItems().Count(id => !_dryListed.Contains(id))
+                    : _plugin.AllListerItems().Count;
                 if (_retainerIdx >= _retainerCount || remaining == 0)
                 {
                     Status = "Done.";
@@ -164,7 +203,7 @@ public sealed class ListRunner
                     // Prepare the queue for this retainer (items still queued, minus any already
                     // handled this run — real mode removes from config; dry run tracks locally).
                     _queue.Clear();
-                    _queue.AddRange(Cfg.ListerItems.Where(id => !_dryListed.Contains(id)));
+                    _queue.AddRange(_plugin.AllListerItems().Where(id => !_dryListed.Contains(id)));
                     // 20-item market cap: only as many free slots as this retainer has left.
                     var current = RetainerReader.ActiveMarketItems();
                     _slotsLeft = Math.Max(0, MaxListingsPerRetainer - current);
@@ -224,10 +263,11 @@ public sealed class ListRunner
                 // Retainer full, or nothing left queued for it — close and move on.
                 if (_queue.Count == 0 || _slotsLeft <= 0)
                 {
-                    if (_slotsLeft <= 0 && _queue.Count > 0)
+                    if (_slotsLeft <= 0 && _queue.Count > 0 && !_postprocessMode)
                         Log($"Retainer {_retainerIdx + 1} full ({MaxListingsPerRetainer} items); remaining items go to the next retainer.");
                     _closeActed = false; _ticks = 0;
-                    State = ListState.CloseRetainer;
+                    // In AR mode, back out to SelectString and release AR (no bell walk).
+                    State = _postprocessMode ? ListState.PostprocessBackout : ListState.CloseRetainer;
                     return;
                 }
                 _currentItem = _queue[0];
@@ -374,8 +414,7 @@ public sealed class ListRunner
                         var extra = string.IsNullOrEmpty(_realPriceNote) ? "" : $" [{_realPriceNote}]";
                         Log($"{name}: listed at {price:N0}g ({ScopeLabel()} base {_realPriceResult:N0}){extra}.");
                         _slotsLeft--;
-                        Cfg.ListerItems.Remove(_currentItem);
-                        Cfg.Save();
+                        _plugin.RemoveListerItem(_currentItem);
                     }
                     Addons.CloseSearchWindows();
                     Wait(500);
@@ -405,13 +444,28 @@ public sealed class ListRunner
                         var extra = string.IsNullOrEmpty(note) ? "" : $" [{note}]";
                         Log($"{name}: listed at {price:N0}g (base {basePrice:N0}){extra}.");
                         _slotsLeft--;   // used one of this retainer's 20 slots
-                        Cfg.ListerItems.Remove(_currentItem);
-                        Cfg.Save();
+                        _plugin.RemoveListerItem(_currentItem);
                     }
                     Addons.CloseSearchWindows();
                     Wait(500);
                     State = ListState.NextItem;
                 }
+                break;
+
+            case ListState.PostprocessBackout:
+                if (Now < _deadline) return;
+                if (Addons.AdvanceTalk()) { Wait(150); return; }
+                if (Addons.IsReady("SelectString"))
+                {
+                    Log("AutoRetainer auto-list done; handing back to AutoRetainer.");
+                    EndPostprocess();
+                    return;
+                }
+                if (Addons.IsVisible("RetainerSellList")) { Addons.CloseAddon("RetainerSellList"); Wait(500); return; }
+                if (Addons.IsVisible("RetainerSell")) { Addons.CloseAddon("RetainerSell"); Wait(400); return; }
+                _ticks++;
+                if (_ticks > 60) { Log("AutoRetainer auto-list: couldn't cleanly return; releasing anyway."); EndPostprocess(); return; }
+                Wait(200);
                 break;
 
             case ListState.CloseRetainer:
@@ -570,6 +624,10 @@ public sealed class ListRunner
         State = ListState.NextItem;
     }
 
-    private void SetError(string msg) { State = ListState.Error; Status = msg; _plugin.Chat($"[Market Helper] {msg}"); }
+    private void SetError(string msg)
+    {
+        State = ListState.Error; Status = msg; _plugin.Chat($"[Market Helper] {msg}");
+        if (_postprocessMode) { var d = _onPostprocessDone; _postprocessMode = false; _onPostprocessDone = null; d?.Invoke(); }
+    }
     private void Log(string msg) { Report.Add(msg); Status = msg; if (Cfg.Verbose) _plugin.Chat($"[Market Helper] {msg}"); }
 }

@@ -72,6 +72,20 @@ public class Configuration : IPluginConfiguration
     // Set high so it only ever catches mannequin displays (conventionally 30M+), never real items.
     public long MannequinSafetyPrice { get; set; } = 20_000_000;
 
+    // Undercut retainers automatically during AutoRetainer's multi-mode (via AR's postprocess API).
+    // When AR opens each retainer to run ventures, Market Helper undercuts that retainer's listings
+    // first, then hands control back so AR can send ventures. Off by default.
+    public bool AutoRetainerIntegration { get; set; } = false;
+
+    // Optional allow-lists to scope which retainers/characters the integration acts on. Empty list
+    // = no filter (act on all). If both are set, BOTH must pass. Opt-out model.
+    public List<string> ArOnlyCharacters { get; set; } = new();   // character names (e.g. "First Last")
+    public List<string> ArOnlyRetainers { get; set; } = new();    // retainer names
+
+    // Also auto-list preset items from inventory during AR postprocess (uses the Lister's item
+    // list and pricing). Off by default — this WRITES new market listings during AR's cycle.
+    public bool ArAutoList { get; set; } = false;
+
     // --- Flipper tax settings ---
     public bool ApplySellerTax { get; set; } = true;
     public bool ApplyBuyerTax { get; set; } = true;
@@ -79,7 +93,8 @@ public class Configuration : IPluginConfiguration
     public float BuyerTaxPercent { get; set; } = 5.0f;    // 5% when buying cross-city
 
     // --- Lister settings ---
-    public List<uint> ListerItems { get; set; } = new();   // item IDs queued to auto-list
+    // Permanent preset list (saved to config, persists across restarts).
+    public List<uint> ListerItems { get; set; } = new();
     public bool ListerPriceByDc { get; set; } = false;     // legacy; superseded by ListerPriceScope
     public int ListerPriceScope { get; set; } = 0;         // 0 = home world, 1 = data center, 2 = region
     public int ListerUndercutBy { get; set; } = 1;         // gil below the lowest
