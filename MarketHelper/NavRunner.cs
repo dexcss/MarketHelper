@@ -22,6 +22,7 @@ public enum NavState
     WaitContextOrSell,
     WaitRetainerSell,
     Search,
+    Search2,
     WaitSearch,
     Price,
     WaitPriceClose,
@@ -59,6 +60,9 @@ public sealed class NavRunner
     private double _deadline;
     private int _ticks;
     private uint _lastPricedFirst;  // lowest price seen on the last completed item
+    private bool _marketConfirmedEmpty; // true only when we POSITIVELY confirmed zero listings
+    private bool _throttleBackoff;  // set when a search likely hit the game's rate limit
+    private int _throttleStreak;    // consecutive throttles, to escalate the backoff
     private bool _refired;
     private uint _stableProbe = uint.MaxValue; // last-seen lowest price, to confirm stability across polls
     private int _stableCount;       // consecutive polls the lowest price has held steady
@@ -88,6 +92,7 @@ public sealed class NavRunner
     {
         Report.Clear();
         _priceMemory.Clear();
+        _throttleStreak = 0; _throttleBackoff = false; _marketConfirmedEmpty = false;
         _retainerIdx = -1;
         if (Addons.Exists("RetainerList"))
         {
@@ -125,6 +130,7 @@ public sealed class NavRunner
         }
         Report.Clear();
         _priceMemory.Clear();
+        _throttleStreak = 0; _throttleBackoff = false; _marketConfirmedEmpty = false;
         _postprocessMode = true;
         _onPostprocessDone = onDone;
         _itemSlot = 0;
@@ -383,11 +389,33 @@ public sealed class NavRunner
                 Status = $"Searching market for {_openItem}...";
                 _stableProbe = uint.MaxValue;
                 _stableCount = 0;
+                // If we recently hit the game's search rate limit, wait longer before firing the
+                // next search so the limiter resets. Escalates the pause on repeated throttling.
+                if (_throttleBackoff)
+                {
+                    _throttleBackoff = false;
+                    _throttleStreak++;
+                    var backoff = Math.Min(1000 + _throttleStreak * 750, 5000);
+                    Log($"Backing off {backoff}ms to avoid the market search rate limit.");
+                    Wait(backoff);
+                    State = NavState.Search2; // fire after the backoff
+                    return;
+                }
+                _throttleStreak = 0;
                 Addons.FireComparePrices();
                 _ticks = 0;
                 _refired = false;
                 // Short settle; correctness now comes from the item-name match in WaitSearch, not
                 // from waiting out the previous item's data.
+                Wait(200);
+                State = NavState.WaitSearch;
+                break;
+
+            case NavState.Search2:
+                if (Now < _deadline) return;
+                Addons.FireComparePrices();
+                _ticks = 0;
+                _refired = false;
                 Wait(200);
                 State = NavState.WaitSearch;
                 break;
@@ -419,6 +447,7 @@ public sealed class NavRunner
                         if (settled)
                         {
                             _lastPricedFirst = fp;
+                            _marketConfirmedEmpty = false;   // we have real listing data
                             _openItem = searchName;
                             State = NavState.Price;
                             return;
@@ -434,6 +463,7 @@ public sealed class NavRunner
                         if (_ticks > 60)
                         {
                             _lastPricedFirst = fp;
+                            _marketConfirmedEmpty = false;   // we have real (if volatile) data
                             _openItem = searchName;
                             Log($"{_openItem}: market unsettled; using current lowest {fp:N0}.");
                             State = NavState.Price;
@@ -443,10 +473,14 @@ public sealed class NavRunner
                     }
                     break;
                 }
-                else if (itemMatches && MarketData.ListingCount() == 0 && _ticks > 15 && !MarketData.IsWaiting())
+                else if (itemMatches && MarketData.ListingCount() == 0 && _ticks > 25
+                         && !MarketData.IsWaiting())
                 {
-                    // Genuinely empty market for the CORRECT item.
+                    // Genuinely empty market for the CORRECT item: confirmed zero listings, board
+                    // not loading, and we've waited long enough that it isn't just a slow/throttled
+                    // response. Only here is it safe to fall back to the floor price.
                     _lastPricedFirst = 0;
+                    _marketConfirmedEmpty = true;
                     _openItem = searchName;
                     State = NavState.Price;
                     return;
@@ -466,16 +500,19 @@ public sealed class NavRunner
                     if (itemMatches && MarketData.ListingsReady() && MarketData.FirstPrice() > 0)
                     {
                         _lastPricedFirst = MarketData.FirstPrice();
+                        _marketConfirmedEmpty = false;
                         _openItem = searchName;
                         Log($"{_openItem}: accepting price after slow load.");
                         State = NavState.Price;
                         return;
                     }
-                    Log($"{_openItem}: search timed out, skipping.");
+                    Log($"{_openItem}: search timed out (possibly rate-limited); leaving price unchanged, skipping.");
                     Addons.CloseSearchWindows();
                     Addons.CloseAddon("RetainerSell");
                     _itemSlot++;
-                    Wait(400);
+                    _marketConfirmedEmpty = false;  // never floor after a timeout
+                    _throttleBackoff = true;        // back off in case it was the rate limit
+                    Wait(1200);
                     State = NavState.WaitPriceClose;
                     return;
                 }
@@ -485,6 +522,22 @@ public sealed class NavRunner
             case NavState.Price:
             {
                 var listings = MarketData.GetListings();
+
+                // SAFETY: if the market came back empty but we did NOT positively confirm it's
+                // genuinely empty, the search likely failed or was rate-limited ("Please wait and
+                // try your search again"). Do NOT fall back to the floor price — that dumps items
+                // at MinPriceFloor (e.g. 69g). Skip the item and leave its price untouched.
+                if (listings.Count == 0 && !_marketConfirmedEmpty)
+                {
+                    Log($"{_openItem}: market data unavailable (search may be rate-limited); leaving price unchanged, skipping.");
+                    Addons.CloseSearchWindows();
+                    Addons.CloseAddon("RetainerSell");
+                    _itemSlot++;
+                    _throttleBackoff = true;   // slow down subsequent searches
+                    Wait(1500);                // extra pause to let the game's search limiter reset
+                    State = NavState.WaitPriceClose;
+                    return;
+                }
 
                 // Memory key uses the raw node name (consistent per item, even if it renders ugly),
                 // because the pre-search memory lookup only has the node text to go on. Display and

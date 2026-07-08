@@ -45,8 +45,10 @@ public partial class MainWindow
 
         ImGui.SetNextItemWidth(SW(160));
         var floor = Cfg.MinPriceFloor;
-        if (ImGui.InputInt("Min price floor", ref floor))
-        { Cfg.MinPriceFloor = Math.Max(1, floor); changed = true; }
+        if (ImGui.InputInt("Fallback price", ref floor))
+        { Cfg.MinPriceFloor = Math.Clamp(floor, 1, 999_999_999); changed = true; }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Price used only as a last-resort fallback (e.g. a truly empty market). Defaults to 100,000,000 on purpose: if anything ever goes wrong, the item lists so high nobody buys it — far safer than dumping it cheap. FFXIV's max is 999,999,999.");
         ImGui.SameLine(0, SW(6));
         HelpMarker("Applied when the computed price would be 1 gil or less.");
 

@@ -43,7 +43,9 @@ public class Configuration : IPluginConfiguration
     // --- Behaviour / safety ---
     public bool Verbose { get; set; } = true;
     public bool Debug { get; set; } = false;
-    public int MinPriceFloor { get; set; } = 69;               // price applied when computed <= 1
+    public int MinPriceFloor { get; set; } = 100_000_000;      // fallback price; set very high so an
+                                                               // accidental fallback lists out of reach
+                                                               // (nobody buys it) rather than dirt cheap
     public bool SkipItemsAlreadyLowest { get; set; } = true;   // don't re-set if already cheapest & ours
 
     // --- Reactive mode ---
