@@ -404,13 +404,16 @@ public sealed class NavRunner
                 var itemMatches = !string.IsNullOrEmpty(searchName)
                                   && NameMatches(searchName, _openItem);
 
-                if (itemMatches && MarketData.ListingsReady())
+                if (itemMatches && MarketData.ListingsReady() && !MarketData.IsWaiting())
                 {
                     var fp = MarketData.FirstPrice();
                     if (fp == _stableProbe && fp != 0)
                     {
                         _stableCount++;
-                        if (_stableCount >= 2)
+                        // Require 3 consecutive identical reads with the board not in a loading
+                        // state. This defeats stale/cached snapshots that briefly show old listings
+                        // (e.g. our own just-changed prices) right after a previous run.
+                        if (_stableCount >= 3)
                         {
                             _lastPricedFirst = fp;
                             // Adopt the clean name now that we've confirmed the match.
@@ -418,6 +421,7 @@ public sealed class NavRunner
                             State = NavState.Price;
                             return;
                         }
+                        Wait(150);   // space probes so the 3 reads span ~450ms, not 3 frames
                     }
                     else
                     {
