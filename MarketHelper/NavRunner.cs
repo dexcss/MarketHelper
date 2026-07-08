@@ -404,30 +404,44 @@ public sealed class NavRunner
                 var itemMatches = !string.IsNullOrEmpty(searchName)
                                   && NameMatches(searchName, _openItem);
 
-                if (itemMatches && MarketData.ListingsReady() && !MarketData.IsWaiting())
+                if (itemMatches && MarketData.ListingsReady())
                 {
                     var fp = MarketData.FirstPrice();
                     if (fp == _stableProbe && fp != 0)
                     {
                         _stableCount++;
-                        // Require 3 consecutive identical reads with the board not in a loading
-                        // state. This defeats stale/cached snapshots that briefly show old listings
-                        // (e.g. our own just-changed prices) right after a previous run.
-                        if (_stableCount >= 3)
+                        // Accept once the lowest price has held steady across enough spaced polls.
+                        // Prefer the board to not be loading, but don't REQUIRE it — the loading
+                        // flag can flicker even when data is settled, which would hang us forever.
+                        // So: accept at 3 stable reads if not waiting, or at 5 stable reads
+                        // regardless (hard fallback so we can never deadlock on a noisy flag).
+                        var settled = (_stableCount >= 3 && !MarketData.IsWaiting()) || _stableCount >= 5;
+                        if (settled)
                         {
                             _lastPricedFirst = fp;
-                            // Adopt the clean name now that we've confirmed the match.
                             _openItem = searchName;
                             State = NavState.Price;
                             return;
                         }
-                        Wait(150);   // space probes so the 3 reads span ~450ms, not 3 frames
+                        Wait(120);   // space the stability polls so they span real time
                     }
                     else
                     {
                         _stableProbe = fp;
                         _stableCount = 1;
+                        // If the price keeps changing every poll (volatile market), don't loop
+                        // forever — after many attempts, accept the current readable price.
+                        if (_ticks > 60)
+                        {
+                            _lastPricedFirst = fp;
+                            _openItem = searchName;
+                            Log($"{_openItem}: market unsettled; using current lowest {fp:N0}.");
+                            State = NavState.Price;
+                            return;
+                        }
+                        Wait(120);
                     }
+                    break;
                 }
                 else if (itemMatches && MarketData.ListingCount() == 0 && _ticks > 15 && !MarketData.IsWaiting())
                 {
@@ -447,6 +461,16 @@ public sealed class NavRunner
 
                 if (_ticks > 150)
                 {
+                    // Last resort: if we can read a valid price for the correct item, use it rather
+                    // than skip. Only skip if we truly never got usable data.
+                    if (itemMatches && MarketData.ListingsReady() && MarketData.FirstPrice() > 0)
+                    {
+                        _lastPricedFirst = MarketData.FirstPrice();
+                        _openItem = searchName;
+                        Log($"{_openItem}: accepting price after slow load.");
+                        State = NavState.Price;
+                        return;
+                    }
                     Log($"{_openItem}: search timed out, skipping.");
                     Addons.CloseSearchWindows();
                     Addons.CloseAddon("RetainerSell");
