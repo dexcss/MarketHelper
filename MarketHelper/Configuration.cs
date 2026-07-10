@@ -59,6 +59,10 @@ public class Configuration : IPluginConfiguration
     // occasionally miss on high latency; lower toward 0.5 to go faster on a fast connection.
     public float SpeedMultiplier { get; set; } = 1.0f;
 
+    // Minimum delay (ms) before each market search, to avoid the game's "Please wait and try your
+    // search again" rate limit. Higher = safer on high-latency connections. Default 600ms.
+    public int SearchPacingMs { get; set; } = 600;
+
     // Reuse a scanned item's price for later identical items in the same run (skips re-searching
     // duplicate stacks). Cleared at the start of each Run.
     public bool UsePriceMemory { get; set; } = true;

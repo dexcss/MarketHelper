@@ -63,6 +63,8 @@ public sealed class NavRunner
     private bool _marketConfirmedEmpty; // true only when we POSITIVELY confirmed zero listings
     private bool _throttleBackoff;  // set when a search likely hit the game's rate limit
     private int _throttleStreak;    // consecutive throttles, to escalate the backoff
+    private int _throttleRetries;   // retries of the CURRENT item due to rate-limit (reset per item)
+    private const int MaxThrottleRetries = 5;
     private bool _refired;
     private uint _stableProbe = uint.MaxValue; // last-seen lowest price, to confirm stability across polls
     private int _stableCount;       // consecutive polls the lowest price has held steady
@@ -92,7 +94,7 @@ public sealed class NavRunner
     {
         Report.Clear();
         _priceMemory.Clear();
-        _throttleStreak = 0; _throttleBackoff = false; _marketConfirmedEmpty = false;
+        _throttleStreak = 0; _throttleBackoff = false; _marketConfirmedEmpty = false; _throttleRetries = 0;
         _retainerIdx = -1;
         if (Addons.Exists("RetainerList"))
         {
@@ -130,7 +132,7 @@ public sealed class NavRunner
         }
         Report.Clear();
         _priceMemory.Clear();
-        _throttleStreak = 0; _throttleBackoff = false; _marketConfirmedEmpty = false;
+        _throttleStreak = 0; _throttleBackoff = false; _marketConfirmedEmpty = false; _throttleRetries = 0;
         _postprocessMode = true;
         _onPostprocessDone = onDone;
         _itemSlot = 0;
@@ -282,6 +284,7 @@ public sealed class NavRunner
                     return;
                 }
                 if (!Addons.IsReady("RetainerSellList")) { Wait(100); return; }
+                _throttleRetries = 0;   // fresh item — reset its rate-limit retry counter
 
                 // Skip mannequin / display items WITHOUT opening them. Primary signal is the game's
                 // own mannequin icon on the sell-list row (deterministic). Fallback is the price
@@ -389,27 +392,26 @@ public sealed class NavRunner
                 Status = $"Searching market for {_openItem}...";
                 _stableProbe = uint.MaxValue;
                 _stableCount = 0;
-                // If we recently hit the game's search rate limit, wait longer before firing the
-                // next search so the limiter resets. Escalates the pause on repeated throttling.
+                // Pace EVERY search with a baseline delay so we don't outrun the game's search rate
+                // limit (the "Please wait and try your search again" error), which is worse on
+                // high-latency connections. Throttling escalates this further.
                 if (_throttleBackoff)
                 {
                     _throttleBackoff = false;
                     _throttleStreak++;
-                    var backoff = Math.Min(1000 + _throttleStreak * 750, 5000);
-                    Log($"Backing off {backoff}ms to avoid the market search rate limit.");
-                    Wait(backoff);
-                    State = NavState.Search2; // fire after the backoff
+                    // Escalating backoff on top of the baseline pacing.
+                    var backoff = Math.Min(Cfg.SearchPacingMs + _throttleStreak * 1000, 8000);
+                    Log($"Rate limit hit — backing off {backoff}ms before retrying {_openItem}.");
+                    _deadline = Now + backoff;   // direct — already an intended-ms value
+                    State = NavState.Search2;
                     return;
                 }
                 _throttleStreak = 0;
-                Addons.FireComparePrices();
-                _ticks = 0;
-                _refired = false;
-                // Short settle; correctness now comes from the item-name match in WaitSearch, not
-                // from waiting out the previous item's data.
-                Wait(200);
-                State = NavState.WaitSearch;
-                break;
+                // Baseline pace before firing (min gap between searches). Apply directly — this
+                // value IS the intended millisecond delay, so don't run it through scaled Wait().
+                _deadline = Now + Math.Max(50, Cfg.SearchPacingMs);
+                State = NavState.Search2;
+                return;
 
             case NavState.Search2:
                 if (Now < _deadline) return;
@@ -474,15 +476,42 @@ public sealed class NavRunner
                     break;
                 }
                 else if (itemMatches && MarketData.ListingCount() == 0 && _ticks > 25
-                         && !MarketData.IsWaiting())
+                         && !MarketData.IsWaiting() && !Addons.MarketSearchThrottled())
                 {
                     // Genuinely empty market for the CORRECT item: confirmed zero listings, board
-                    // not loading, and we've waited long enough that it isn't just a slow/throttled
-                    // response. Only here is it safe to fall back to the floor price.
+                    // not loading, NOT showing the rate-limit message, and we've waited long enough.
+                    // Only here is it safe to fall back to the (very high) fallback price.
                     _lastPricedFirst = 0;
                     _marketConfirmedEmpty = true;
                     _openItem = searchName;
                     State = NavState.Price;
+                    return;
+                }
+                else if (Addons.MarketSearchThrottled())
+                {
+                    // Explicit rate-limit message — this search failed. RETRY the same item after a
+                    // backoff rather than skipping it, so slow connections just take longer instead
+                    // of missing items. Cap retries so a genuinely stuck item can't loop forever.
+                    _throttleRetries++;
+                    if (_throttleRetries <= MaxThrottleRetries)
+                    {
+                        Log($"{_openItem}: rate-limited, retrying ({_throttleRetries}/{MaxThrottleRetries}) after backoff...");
+                        Addons.CloseSearchWindows();
+                        _marketConfirmedEmpty = false;
+                        _throttleBackoff = true;   // Search state applies the escalating backoff
+                        State = NavState.Search;   // re-search the SAME item (no _itemSlot++)
+                        return;
+                    }
+                    // Exhausted retries: leave this item's price untouched and move on.
+                    Log($"{_openItem}: still rate-limited after {MaxThrottleRetries} retries; leaving price unchanged, skipping.");
+                    Addons.CloseSearchWindows();
+                    Addons.CloseAddon("RetainerSell");
+                    _itemSlot++;
+                    _throttleRetries = 0;
+                    _marketConfirmedEmpty = false;
+                    _throttleBackoff = true;
+                    Wait(500);
+                    State = NavState.WaitPriceClose;
                     return;
                 }
 
@@ -788,7 +817,14 @@ public sealed class NavRunner
         State = NavState.WaitPriceClose;
     }
 
-    private void Wait(int ms) => _deadline = Now + (int)(ms * Math.Clamp(Cfg.SpeedMultiplier, 0.3f, 3.0f));
+    // General action delays scale with the single speed slider (SearchPacingMs), relative to the
+    // 600ms baseline: at 600 -> 1.0x, at 300 -> 0.5x (faster), at 1200 -> 2.0x (slower). Clamped so
+    // non-search steps never get absurdly fast or slow.
+    private void Wait(int ms)
+    {
+        var scale = Math.Clamp(Cfg.SearchPacingMs / 600f, 0.35f, 2.5f);
+        _deadline = Now + (int)(ms * scale);
+    }
 
     private void SetError(string msg)
     {

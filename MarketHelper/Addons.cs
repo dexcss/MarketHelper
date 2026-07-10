@@ -211,8 +211,31 @@ public static unsafe class Addons
     }
 
     /// <summary>
-    /// Select a ContextMenu entry by matching its visible text (case-insensitive, any of the
-    /// given options). Returns the matched index, or -1 if none matched. Uses ECommons'
+    /// True if the market search results window is showing the game's rate-limit message
+    /// ("Please wait and try your search again."), which means the search FAILED — the empty
+    /// result is NOT a genuinely empty market. Read from the ItemSearchResult addon's message node.
+    /// </summary>
+    public static unsafe bool MarketSearchThrottled()
+    {
+        var addon = GetAddon("ItemSearchResult");
+        if (addon == null) return false;
+        // The "please wait" message is shown in a text node when the list is empty due to throttle.
+        // Scan visible text nodes for the known phrase (locale-tolerant: match a stable substring).
+        for (uint id = 1; id <= 60; id++)
+        {
+            var node = addon->UldManager.SearchNodeById(id);
+            if (node == null || node->Type != NodeType.Text) continue;
+            var tn = (AtkTextNode*)node;
+            if (!tn->AtkResNode.IsVisible()) continue;
+            var text = tn->NodeText.ToString();
+            if (string.IsNullOrEmpty(text)) continue;
+            // Match on stable fragments that appear across languages' phrasing of the throttle msg.
+            if (text.Contains("try your search again", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("Please wait and try", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
     /// AddonMaster.ContextMenu (same as AutoRetainer) so it reads real entry text and selects by
     /// name — it never blind-clicks a positional index, so it can't hit a destructive entry.
     /// </summary>

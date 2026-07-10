@@ -63,9 +63,12 @@ public partial class MainWindow
         HelpMarker("On: fully hands-off — sets and confirms. Off: sets the price but you click Confirm yourself.");
 
         ImGui.SetNextItemWidth(SW(220));
-        var speed = Cfg.SpeedMultiplier;
-        if (ImGui.SliderFloat("Step speed", ref speed, 0.5f, 2.0f, "%.2fx"))
-        { Cfg.SpeedMultiplier = speed; changed = true; }
+        ImGui.SetNextItemWidth(SW(220));
+        var pacing = Cfg.SearchPacingMs;
+        if (ImGui.SliderInt("Speed / search delay (ms)", ref pacing, 150, 2500))
+        { Cfg.SearchPacingMs = Math.Clamp(pacing, 150, 2500); changed = true; }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Delay before each market search, and the overall pace. Lower = faster (good on low ping); higher = slower and safer. If you get 'Please wait and try your search again' errors, raise it (try ~1000-1500ms on higher-ping connections). 600 is a safe default; drop toward 150-300 if your connection is fast.");
         ImGui.SameLine(0, SW(6));
         HelpMarker("Lower = faster (shorter waits between steps). Raise toward 2x if items occasionally get skipped on high latency. Doesn't affect the market search, which is server-limited.");
 

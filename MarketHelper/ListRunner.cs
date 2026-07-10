@@ -502,7 +502,11 @@ public sealed class ListRunner
         }
     }
 
-    private void Wait(int ms) => _deadline = Now + ms;
+    private void Wait(int ms)
+    {
+        var scale = Math.Clamp(Cfg.SearchPacingMs / 600f, 0.35f, 2.5f);
+        _deadline = Now + (int)(ms * scale);
+    }
 
     /// <summary>Resolve the Universalis location string for the configured pricing scope.</summary>
     private string PriceScope() => Cfg.ListerPriceScope switch
