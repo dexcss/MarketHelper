@@ -104,4 +104,75 @@ public static unsafe class RetainerReader
         }
         return null;
     }
+
+    // ---- Item Gatherer helpers ----
+
+    /// <summary>Number of free slots across the player's four main inventory bags.</summary>
+    public static int FreePlayerBagSlots()
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return 0;
+        var free = 0;
+        foreach (var type in new[] { InventoryType.Inventory1, InventoryType.Inventory2,
+                                     InventoryType.Inventory3, InventoryType.Inventory4 })
+        {
+            var inv = im->GetInventoryContainer(type);
+            if (inv == null || !inv->IsLoaded) continue;
+            for (var i = 0; i < inv->Size; i++)
+            {
+                var slot = inv->GetInventorySlot(i);
+                if (slot == null || slot->ItemId == 0 || slot->Quantity == 0) free++;
+            }
+        }
+        return free;
+    }
+
+    /// <summary>True if the player's main bags have no free slots.</summary>
+    public static bool PlayerBagsFull() => FreePlayerBagSlots() <= 0;
+
+    /// <summary>
+    /// Find the first slot in the retainer's INVENTORY (RetainerPage1-7) holding one of the given
+    /// item ids. Returns (container, slot, itemId) or null if none present.
+    /// </summary>
+    public static (InventoryType Type, ushort Slot, uint ItemId)? FindRetainerInventoryItem(HashSet<uint> wanted)
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return null;
+        foreach (var type in new[] { InventoryType.RetainerPage1, InventoryType.RetainerPage2,
+                                     InventoryType.RetainerPage3, InventoryType.RetainerPage4,
+                                     InventoryType.RetainerPage5, InventoryType.RetainerPage6,
+                                     InventoryType.RetainerPage7 })
+        {
+            var inv = im->GetInventoryContainer(type);
+            if (inv == null || !inv->IsLoaded) continue;
+            for (var i = 0; i < inv->Size; i++)
+            {
+                var slot = inv->GetInventorySlot(i);
+                if (slot == null || slot->Quantity == 0) continue;
+                if (wanted.Contains(slot->ItemId))
+                    return (type, (ushort)i, slot->ItemId);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Find the first slot in the retainer's MARKET listings (RetainerMarket) holding one of the
+    /// given item ids. Returns (container, slot, itemId) or null.
+    /// </summary>
+    public static (InventoryType Type, ushort Slot, uint ItemId)? FindRetainerMarketItem(HashSet<uint> wanted)
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return null;
+        var inv = im->GetInventoryContainer(InventoryType.RetainerMarket);
+        if (inv == null || !inv->IsLoaded) return null;
+        for (var i = 0; i < inv->Size; i++)
+        {
+            var slot = inv->GetInventorySlot(i);
+            if (slot == null || slot->Quantity == 0) continue;
+            if (wanted.Contains(slot->ItemId))
+                return (InventoryType.RetainerMarket, (ushort)i, slot->ItemId);
+        }
+        return null;
+    }
 }

@@ -101,6 +101,12 @@ public class Configuration : IPluginConfiguration
     // --- Lister settings ---
     // Permanent preset list (saved to config, persists across restarts).
     public List<uint> ListerItems { get; set; } = new();
+
+    // --- Item Gatherer settings ---
+    // Designated items to pull off retainers into your main inventory. Own list, saved.
+    public List<uint> GathererItems { get; set; } = new();
+    public bool GatherFromInventory { get; set; } = true;   // pull from retainer inventory
+    public bool GatherFromMarket { get; set; } = true;      // pull back from active market listings
     public bool ListerPriceByDc { get; set; } = false;     // legacy; superseded by ListerPriceScope
     public int ListerPriceScope { get; set; } = 0;         // 0 = home world, 1 = data center, 2 = region
     public int ListerUndercutBy { get; set; } = 1;         // gil below the lowest

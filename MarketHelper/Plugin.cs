@@ -25,6 +25,7 @@ public sealed class Plugin : IDalamudPlugin
     public MarketListener Listener { get; }
     public NavRunner Nav { get; }
     public ListRunner Lister { get; }
+    public GatherRunner Gatherer { get; }
     public AutoRetainerBridge ArBridge { get; }
 
     // Session-only Lister items (in memory; cleared automatically on plugin reload / game close,
@@ -63,6 +64,7 @@ public sealed class Plugin : IDalamudPlugin
         Listener = new MarketListener(this);
         Nav = new NavRunner(this);
         Lister = new ListRunner(this);
+        Gatherer = new GatherRunner(this);
         ArBridge = new AutoRetainerBridge(this);
         if (Config.AutoRetainerIntegration) ArBridge.Enable();
 
@@ -87,7 +89,7 @@ public sealed class Plugin : IDalamudPlugin
         Framework.Update += OnFrameworkUpdate;
     }
 
-    private void OnFrameworkUpdate(IFramework _) { Nav.Tick(); Lister.Tick(); }
+    private void OnFrameworkUpdate(IFramework _) { Nav.Tick(); Lister.Tick(); Gatherer.Tick(); }
 
     private void OnCommand(string command, string args)
     {

@@ -116,8 +116,9 @@ public partial class MainWindow
         if (Cfg.AutoRetainerIntegration)
         {
             ImGui.Indent(SW(10));
-            ImGui.TextColored(_plugin.ArBridge.AutoRetainerReady ? Green : Red,
-                _plugin.ArBridge.AutoRetainerReady ? "AutoRetainer detected." : "AutoRetainer not detected — install/enable it.");
+            var arReady = _plugin.ArBridge.AutoRetainerReady;   // probe once per frame, not twice
+            ImGui.TextColored(arReady ? Green : Red,
+                arReady ? "AutoRetainer detected." : "AutoRetainer not detected — install/enable it.");
 
             // Auto-list preset items during the AR cycle.
             var arList = Cfg.ArAutoList;

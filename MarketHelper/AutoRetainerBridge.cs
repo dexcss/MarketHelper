@@ -67,10 +67,13 @@ public sealed class AutoRetainerBridge : IDisposable
             _onReady.Subscribe(OnReady);
             _subscribed = true;
             _plugin.Log.Information("AutoRetainer integration enabled.");
+            if (_plugin.Config.Debug)
+                _plugin.Chat($"[Market Helper] AR integration subscribed (AR detected: {AutoRetainerReady}). Waiting for retainer events.");
         }
         catch (Exception ex)
         {
             _plugin.Log.Warning($"Couldn't enable AutoRetainer integration: {ex.Message}");
+            _plugin.Chat($"[Market Helper] AR integration failed to subscribe: {ex.Message}");
         }
     }
 
@@ -89,14 +92,22 @@ public sealed class AutoRetainerBridge : IDisposable
     // AR is offering the retainer for postprocessing — register our interest.
     private void OnStep(string retainerName)
     {
+        if (_plugin.Config.Debug)
+            _plugin.Chat($"[Market Helper] AR OnStep fired for '{retainerName}' (integration on: {_plugin.Config.AutoRetainerIntegration}).");
         if (!_plugin.Config.AutoRetainerIntegration) return;
-        try { _request?.InvokeAction(_pluginName); }
+        try
+        {
+            _request?.InvokeAction(_pluginName);
+            if (_plugin.Config.Debug) _plugin.Chat($"[Market Helper] AR: requested postprocess for '{retainerName}'.");
+        }
         catch (Exception ex) { _plugin.Log.Warning($"AR request failed: {ex.Message}"); }
     }
 
     // It's our turn. AR is blocked until we call finish. Undercut this retainer, then release.
     private void OnReady(string pluginName, string retainerName)
     {
+        if (_plugin.Config.Debug)
+            _plugin.Chat($"[Market Helper] AR OnReady fired (for plugin '{pluginName}', me: '{_pluginName}').");
         if (pluginName != _pluginName) return;   // not addressed to us
         if (!_plugin.Config.AutoRetainerIntegration) { Finish(); return; }
 
