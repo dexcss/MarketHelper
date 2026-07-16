@@ -104,7 +104,7 @@ public partial class MainWindow
         Divider();
 
         var arInt = Cfg.AutoRetainerIntegration;
-        if (ImGui.Checkbox("Undercut during AutoRetainer multi-mode", ref arInt))
+        if (ImGui.Checkbox("Undercut during AutoRetainer multi-mode  [EXPERIMENTAL]", ref arInt))
         {
             Cfg.AutoRetainerIntegration = arInt;
             changed = true;
@@ -112,10 +112,11 @@ public partial class MainWindow
             else _plugin.ArBridge.Disable();
         }
         ImGui.SameLine(0, SW(6));
-        HelpMarker("When AutoRetainer's multi-mode opens each retainer, Market Helper undercuts that retainer's market listings before AutoRetainer sends ventures. AutoRetainer waits for the undercut to finish, so it won't conflict with venture sending. Requires AutoRetainer installed.");
+        HelpMarker("EXPERIMENTAL. Undercuts each retainer's listings during AutoRetainer's multi-mode cycle. Because AutoRetainer waits for this to finish, it can delay or interfere with other automation (e.g. SND selling) if something goes wrong. A safety timeout releases control after 45s. Leave OFF unless you specifically want this and are watching it. Off by default.");
         if (Cfg.AutoRetainerIntegration)
         {
             ImGui.Indent(SW(10));
+            ImGui.TextColored(Gold, "Experimental — may interfere with other automation. Watch it while it runs.");
             var arReady = _plugin.ArBridge.AutoRetainerReady;   // probe once per frame, not twice
             ImGui.TextColored(arReady ? Green : Red,
                 arReady ? "AutoRetainer detected." : "AutoRetainer not detected — install/enable it.");

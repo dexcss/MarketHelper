@@ -16,6 +16,7 @@ public enum NavState
     SelectRetainer,
     WaitSelectString,
     EnterSellMenu,
+    PostprocessEnter,
     WaitSellList,
     NextItem,
     OpenItem,
@@ -79,6 +80,8 @@ public sealed class NavRunner
     // callback. We do NOT touch the bell, retainer selection, or Quit in this mode.
     private bool _postprocessMode;
     private Action? _onPostprocessDone;
+    private double _postprocessStart;                    // when postprocess began (watchdog)
+    private const int PostprocessMaxMs = 45_000;         // hard cap before force-releasing AR
 
     // Session price memory: once an item is searched and priced, remember the result so any
     // later identical item (same name + HQ) this run is set instantly without re-searching.
@@ -135,12 +138,13 @@ public sealed class NavRunner
         _throttleStreak = 0; _throttleBackoff = false; _marketConfirmedEmpty = false; _throttleRetries = 0;
         _postprocessMode = true;
         _onPostprocessDone = onDone;
+        _postprocessStart = Now;
         _itemSlot = 0;
         _ticks = 0;
         Status = $"AutoRetainer: undercutting {retainerName}...";
         Log($"AutoRetainer postprocess: undercutting {retainerName}.");
-        // AR leaves us at the retainer's SelectString menu; enter the sell-items screen.
-        State = NavState.EnterSellMenu;
+        // Don't assume the exact UI state AR hands us — detect it and navigate safely by name.
+        State = NavState.PostprocessEnter;
     }
 
     /// <summary>Finish postprocess: return to SelectString (where AR resumes) and release AR.</summary>
@@ -149,14 +153,47 @@ public sealed class NavRunner
         var done = _onPostprocessDone;
         _postprocessMode = false;
         _onPostprocessDone = null;
+        _postprocessStart = 0;
         State = NavState.Idle;
         Status = "Idle.";
         done?.Invoke();
     }
 
+    /// <summary>
+    /// Clean early exit from postprocess: close any windows we opened and release AR immediately.
+    /// Used when we can't do useful work (wrong UI, no sell list) — never leaves AR blocked.
+    /// </summary>
+    private void PostprocessBackoutRelease()
+    {
+        Addons.CloseSearchWindows();
+        EndPostprocess();
+    }
+
     public void Tick()
     {
         if (!Running) return;
+
+        // WATCHDOG: never let an AutoRetainer postprocess hold AR's lock indefinitely. If we've been
+        // in postprocess mode too long (stuck finding the sell list, a UI state we didn't expect,
+        // etc.), force-release AR and bail. This guarantees we can't freeze AR/SND's automation.
+        if (_postprocessMode)
+        {
+            if (_postprocessStart == 0) _postprocessStart = Now;
+            else if (Now - _postprocessStart > PostprocessMaxMs)
+            {
+                _plugin.Chat($"[Market Helper] AutoRetainer postprocess took too long — releasing control to AutoRetainer.");
+                Addons.CloseSearchWindows();
+                var done = _onPostprocessDone;
+                _postprocessMode = false;
+                _onPostprocessDone = null;
+                _postprocessStart = 0;
+                State = NavState.Idle;
+                Status = "Idle.";
+                done?.Invoke();   // release AR
+                return;
+            }
+        }
+
         try { Step(); }
         catch (Exception ex)
         {
@@ -260,8 +297,28 @@ public sealed class NavRunner
                 if (Now > _deadline + 12000) { SetError("Retainer menu (SelectString) didn't open."); return; }
                 break;
 
+            case NavState.PostprocessEnter:
+                if (Now < _deadline) return;
+                // Clear any leftover talk bubble first.
+                if (Addons.AdvanceTalk()) { Wait(150); return; }
+                // Already on the sell list? go straight to pricing items.
+                if (Addons.IsReady("RetainerSellList")) { StartItems(); return; }
+                // At the retainer menu? open the sell-on-market screen BY NAME (not blind index).
+                if (Addons.IsReady("SelectString"))
+                {
+                    if (Addons.OpenSellOnMarket()) { Wait(800); _ticks = 0; return; }
+                    // Couldn't find the entry — bail cleanly so AR isn't held.
+                    if (++_ticks > 40) { Log("Postprocess: couldn't open sell list; releasing to AutoRetainer."); PostprocessBackoutRelease(); return; }
+                    Wait(200);
+                    return;
+                }
+                // Unexpected UI (AR may be mid-transition). Wait briefly; the watchdog will catch a
+                // true hang. If nothing resolves, release rather than spin forever.
+                if (++_ticks > 60) { Log("Postprocess: retainer sell UI never appeared; releasing to AutoRetainer."); PostprocessBackoutRelease(); return; }
+                Wait(200);
+                break;
+
             case NavState.EnterSellMenu:
-                // Entry 3 = "Sell items on the market" (script: SafeCallback SelectString true, 3)
                 Addons.SelectStringEntry(3);
                 Wait(150);
                 State = NavState.WaitSellList;
