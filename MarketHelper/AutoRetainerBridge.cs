@@ -18,7 +18,9 @@ public sealed class AutoRetainerBridge : IDisposable
 {
     // ApiConsts endpoint names from PunishXIV/AutoRetainerAPI.
     private const string OnRetainerReadyForPostprocess = "AutoRetainer.OnRetainerReadyForPostprocess";
-    private const string RequestRetainerPostProcess = "AutoRetainer.RequestRetainerPostProcess";
+    // NOTE: the registered IPC channel uses the HANDLER name "RequestRetainerPostprocess" —
+    // lowercase 'p' in "process". Capital-P here causes AR's "not registered yet" error.
+    private const string RequestRetainerPostProcess = "AutoRetainer.RequestRetainerPostprocess";
     private const string FinishRetainerPostprocessRequest = "AutoRetainer.FinishRetainerPostprocessRequest";
     private const string OnRetainerPostprocessTask = "AutoRetainer.OnRetainerAdditionalTask";
 
