@@ -10,7 +10,7 @@ namespace MarketHelper;
 public enum ListState
 {
     Idle, FindBell, InteractBell, WaitRetainerList, NextRetainer, SelectRetainer, WaitSelectString,
-    OpenInventory, NextItem, BeginSell, WaitDryPrice, WaitSell, Price, WaitRealPrice, WaitClose, CloseRetainer, PostprocessBackout, WaitClosed, Done, Error,
+    OpenInventory, NextItem, WaitStackSettle, BeginSell, WaitDryPrice, WaitSell, Price, WaitRealPrice, WaitClose, CloseRetainer, PostprocessBackout, WaitClosed, Done, Error,
 }
 
 /// <summary>
@@ -41,6 +41,8 @@ public sealed class ListRunner
     private readonly List<uint> _queue = new();
     private uint _currentItem;
     private (InventoryType Type, ushort Slot)? _currentLoc;
+    private uint _justListedItem;   // item just listed, pending stack-settle check
+    private (InventoryType Type, ushort Slot)? _justListedLoc;   // where it was listed from
 
     // 20-listing cap: how many free market slots this retainer has left this run.
     private int _slotsLeft;
@@ -78,6 +80,7 @@ public sealed class ListRunner
         DryRun = dryRun;
         Report.Clear();
         _dryListed.Clear();
+        _justListedItem = 0; _justListedLoc = null;
         _retainerIdx = -1;
         State = ListState.FindBell;
         Status = dryRun ? "Dry run: looking for bell..." : "Listing: looking for bell...";
@@ -98,6 +101,7 @@ public sealed class ListRunner
         _onPostprocessDone = onDone;
         Report.Clear();
         _dryListed.Clear();
+        _justListedItem = 0; _justListedLoc = null;
         _ticks = 0;
         // Build this retainer's queue and free-slot count, then enter the sell screen.
         _queue.Clear();
@@ -259,6 +263,37 @@ public sealed class ListRunner
                 Wait(200);
                 break;
 
+            case ListState.WaitStackSettle:
+            {
+                if (Now < _deadline) return;
+                _ticks++;
+                // If no listing happened (manual-price branch), just move on.
+                if (_justListedItem == 0) { State = ListState.NextItem; return; }
+                // Wait until the just-listed stack has actually left its inventory slot (listing is
+                // async), so we don't mistake it for a "remaining" stack.
+                var stillThere = _justListedLoc != null
+                    && RetainerReader.SlotHasItem(_justListedLoc.Value.Type, _justListedLoc.Value.Slot, _justListedItem);
+                if (stillThere && _ticks < 40) { Wait(150); return; }   // give it up to ~6s
+
+                // Now decide: are there MORE stacks of this item left to list?
+                var item = _justListedItem;
+                _justListedItem = 0;
+                _justListedLoc = null;
+                var more = _slotsLeft > 0 && RetainerReader.FindItemSlot(item, includeRetainer: true) != null;
+                if (more)
+                {
+                    if (!_queue.Contains(item)) _queue.Insert(0, item);
+                    Log($"{ItemSearch.FindById(item)}: more stacks remain — listing another.");
+                }
+                else
+                {
+                    _plugin.RemoveListerItem(item);
+                    _queue.Remove(item);
+                }
+                State = ListState.NextItem;
+                return;
+            }
+
             case ListState.NextItem:
                 // Retainer full, or nothing left queued for it — close and move on.
                 if (_queue.Count == 0 || _slotsLeft <= 0)
@@ -413,12 +448,11 @@ public sealed class ListRunner
                         Addons.SetPriceAndConfirm((int)Math.Min(price, int.MaxValue));
                         var extra = string.IsNullOrEmpty(_realPriceNote) ? "" : $" [{_realPriceNote}]";
                         Log($"{name}: listed at {price:N0}g ({ScopeLabel()} base {_realPriceResult:N0}){extra}.");
-                        _slotsLeft--;
-                        _plugin.RemoveListerItem(_currentItem);
+                        AfterListed();
                     }
                     Addons.CloseSearchWindows();
                     Wait(500);
-                    State = ListState.NextItem;
+                    State = ListState.WaitStackSettle;
                 }
                 Wait(100);
                 break;
@@ -443,12 +477,11 @@ public sealed class ListRunner
                         Addons.SetPriceAndConfirm((int)Math.Min(price, int.MaxValue));
                         var extra = string.IsNullOrEmpty(note) ? "" : $" [{note}]";
                         Log($"{name}: listed at {price:N0}g (base {basePrice:N0}){extra}.");
-                        _slotsLeft--;   // used one of this retainer's 20 slots
-                        _plugin.RemoveListerItem(_currentItem);
+                        AfterListed();
                     }
                     Addons.CloseSearchWindows();
                     Wait(500);
-                    State = ListState.NextItem;
+                    State = ListState.WaitStackSettle;
                 }
                 break;
 
@@ -517,6 +550,21 @@ public sealed class ListRunner
     };
 
     private string ScopeLabel() => Cfg.ListerPriceScope switch { 2 => "region", 1 => "DC", _ => "world" };
+
+    /// <summary>
+    /// Called after a stack is successfully listed. If more of the same item remains in inventory
+    /// and the retainer still has free slots, queue another stack of it (so 1000 items across many
+    /// stacks all get listed, not just the first). Otherwise remove it and move to the next item.
+    /// </summary>
+    private void AfterListed()
+    {
+        _slotsLeft--;
+        // Record the slot we just listed so the settle check can confirm it actually cleared before
+        // we look for more stacks (listing moves the item out of inventory asynchronously).
+        _justListedItem = _currentItem;
+        _justListedLoc = _currentLoc;
+        // Decision (list another stack vs move on) happens in the WaitStackSettle state.
+    }
 
     /// <summary>
     /// Given ascending prices, choose the base price to undercut, applying the outlier gap check:

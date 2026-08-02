@@ -107,6 +107,17 @@ public static unsafe class RetainerReader
 
     // ---- Item Gatherer helpers ----
 
+    /// <summary>True if the given container slot currently holds the given item id (quantity &gt; 0).</summary>
+    public static bool SlotHasItem(InventoryType type, ushort slot, uint itemId)
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return false;
+        var inv = im->GetInventoryContainer(type);
+        if (inv == null || !inv->IsLoaded || slot >= inv->Size) return false;
+        var s = inv->GetInventorySlot(slot);
+        return s != null && s->ItemId == itemId && s->Quantity > 0;
+    }
+
     /// <summary>Number of free slots across the player's four main inventory bags.</summary>
     public static int FreePlayerBagSlots()
     {

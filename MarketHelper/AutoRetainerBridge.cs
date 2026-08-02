@@ -18,10 +18,12 @@ public sealed class AutoRetainerBridge : IDisposable
 {
     // ApiConsts endpoint names from PunishXIV/AutoRetainerAPI.
     private const string OnRetainerReadyForPostprocess = "AutoRetainer.OnRetainerReadyForPostprocess";
-    // NOTE: the registered IPC channel uses the HANDLER name "RequestRetainerPostprocess" —
-    // lowercase 'p' in "process". Capital-P here causes AR's "not registered yet" error.
-    private const string RequestRetainerPostProcess = "AutoRetainer.RequestRetainerPostprocess";
-    private const string FinishRetainerPostprocessRequest = "AutoRetainer.FinishRetainerPostprocessRequest";
+    // CRITICAL: these two channel strings do NOT contain the word "Retainer" — the ApiConsts
+    // *constant names* are RequestRetainerPostProcess / FinishRetainerPostprocessRequest, but their
+    // actual string VALUES drop "Retainer". Using the longer name is what caused every prior
+    // "not registered yet" failure. Verified against PunishXIV/AutoRetainerAPI ApiConsts.cs.
+    private const string RequestRetainerPostProcess = "AutoRetainer.RequestPostprocess";
+    private const string FinishRetainerPostprocessRequest = "AutoRetainer.FinishPostprocessRequest";
     private const string OnRetainerPostprocessTask = "AutoRetainer.OnRetainerAdditionalTask";
 
     private readonly Plugin _plugin;
@@ -29,8 +31,6 @@ public sealed class AutoRetainerBridge : IDisposable
 
     private Dalamud.Plugin.Ipc.ICallGateSubscriber<string, object>? _onStep;
     private Dalamud.Plugin.Ipc.ICallGateSubscriber<string, string, object>? _onReady;
-    private Dalamud.Plugin.Ipc.ICallGateSubscriber<string, object>? _request;
-    private Dalamud.Plugin.Ipc.ICallGateSubscriber<object>? _finish;
 
     private bool _subscribed;
 
@@ -62,8 +62,7 @@ public sealed class AutoRetainerBridge : IDisposable
         {
             _onStep = Svc.PluginInterface.GetIpcSubscriber<string, object>(OnRetainerPostprocessTask);
             _onReady = Svc.PluginInterface.GetIpcSubscriber<string, string, object>(OnRetainerReadyForPostprocess);
-            _request = Svc.PluginInterface.GetIpcSubscriber<string, object>(RequestRetainerPostProcess);
-            _finish = Svc.PluginInterface.GetIpcSubscriber<object>(FinishRetainerPostprocessRequest);
+            // Request/Finish are resolved fresh at call time (see OnStep/Finish), not cached.
 
             _onStep.Subscribe(OnStep);
             _onReady.Subscribe(OnReady);
@@ -99,7 +98,9 @@ public sealed class AutoRetainerBridge : IDisposable
         if (!_plugin.Config.AutoRetainerIntegration) return;
         try
         {
-            _request?.InvokeAction(_pluginName);
+            // Resolve fresh each call (matches the official AutoRetainerApi wrapper — avoids a
+            // stale cached CallGate).
+            Svc.PluginInterface.GetIpcSubscriber<string, object>(RequestRetainerPostProcess).InvokeAction(_pluginName);
             if (_plugin.Config.Debug) _plugin.Chat($"[Market Helper] AR: requested postprocess for '{retainerName}'.");
         }
         catch (Exception ex) { _plugin.Log.Warning($"AR request failed: {ex.Message}"); }
@@ -148,7 +149,7 @@ public sealed class AutoRetainerBridge : IDisposable
 
     private void Finish()
     {
-        try { _finish?.InvokeAction(); }
+        try { Svc.PluginInterface.GetIpcSubscriber<object>(FinishRetainerPostprocessRequest).InvokeAction(); }
         catch (Exception ex) { _plugin.Log.Warning($"AR finish failed: {ex.Message}"); }
     }
 
