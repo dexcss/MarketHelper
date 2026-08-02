@@ -32,7 +32,7 @@ public partial class MainWindow
             var id = (uint)(Svc.GameGui.HoveredItem % 1000000);
             if (id > 0 && !Cfg.GathererItems.Contains(id))
             {
-                var name = ItemSearch.FindById(id);
+                var name = ItemSearch.FindByIdAny(id);
                 if (!string.IsNullOrEmpty(name)) { Cfg.GathererItems.Add(id); Cfg.Save(); }
             }
         }
@@ -41,7 +41,7 @@ public partial class MainWindow
         ImGui.InputTextWithHint("##gathersearch", "...or search to add an item", ref _gathererSearch, 100);
         if (_gathererSearch.Trim().Length >= 2)
         {
-            var hits = ItemSearch.Find(_gathererSearch);
+            var hits = ItemSearch.FindAny(_gathererSearch);
             if (hits.Count > 0 && ImGui.BeginChild("##gatheradd", new Vector2(SW(260), SW(120)), true))
             {
                 foreach (var h in hits)
@@ -71,7 +71,7 @@ public partial class MainWindow
                 uint? remove = null;
                 foreach (var id in Cfg.GathererItems)
                 {
-                    var name = ItemSearch.FindById(id);
+                    var name = ItemSearch.FindByIdAny(id);
                     if (string.IsNullOrEmpty(name)) name = $"Item #{id}";
                     if (ImGui.SmallButton($"x##grm{id}")) remove = id;
                     ImGui.SameLine();

@@ -64,4 +64,48 @@ public static class ItemSearch
         }
         return _byId.TryGetValue(id, out var name) ? name : string.Empty;
     }
+
+    // ---- Unfiltered index: ALL named items, including market-prohibited ones. Used by the Item
+    // Gatherer, which just moves items between retainer and bags and doesn't care about the market.
+
+    private static List<Hit>? _allItems;
+    private static Dictionary<uint, string>? _allById;
+
+    private static List<Hit> AllItems()
+    {
+        if (_allItems != null) return _allItems;
+        _allItems = new List<Hit>();
+        _allById = new Dictionary<uint, string>();
+        var sheet = Svc.Data.GetExcelSheet<Item>();
+        if (sheet == null) return _allItems;
+        foreach (var row in sheet)
+        {
+            var name = row.Name.ExtractText();
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            _allItems.Add(new Hit(row.RowId, name));
+            _allById[row.RowId] = name;
+        }
+        return _allItems;
+    }
+
+    /// <summary>Case-insensitive substring search over ALL items (incl. unmarketable), capped.</summary>
+    public static List<Hit> FindAny(string query, int max = 15)
+    {
+        var q = query.Trim();
+        if (q.Length < 2) return new List<Hit>();
+        var ql = q.ToLowerInvariant();
+        return AllItems()
+            .Where(h => h.Name.ToLowerInvariant().Contains(ql))
+            .OrderBy(h => h.Name.ToLowerInvariant().StartsWith(ql) ? 0 : 1)
+            .ThenBy(h => h.Name.Length)
+            .Take(max)
+            .ToList();
+    }
+
+    /// <summary>Name for ANY item id (incl. unmarketable), or empty if not found.</summary>
+    public static string FindByIdAny(uint id)
+    {
+        if (_allById == null) AllItems();
+        return _allById != null && _allById.TryGetValue(id, out var name) ? name : string.Empty;
+    }
 }
