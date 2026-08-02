@@ -43,6 +43,7 @@ public sealed class ListRunner
     private (InventoryType Type, ushort Slot)? _currentLoc;
     private uint _justListedItem;   // item just listed, pending stack-settle check
     private (InventoryType Type, ushort Slot)? _justListedLoc;   // where it was listed from
+    private readonly Dictionary<uint, long> _runPriceCache = new();   // itemId -> listed price, this run
 
     // 20-listing cap: how many free market slots this retainer has left this run.
     private int _slotsLeft;
@@ -80,7 +81,7 @@ public sealed class ListRunner
         DryRun = dryRun;
         Report.Clear();
         _dryListed.Clear();
-        _justListedItem = 0; _justListedLoc = null;
+        _justListedItem = 0; _justListedLoc = null; _runPriceCache.Clear();
         _retainerIdx = -1;
         State = ListState.FindBell;
         Status = dryRun ? "Dry run: looking for bell..." : "Listing: looking for bell...";
@@ -101,7 +102,7 @@ public sealed class ListRunner
         _onPostprocessDone = onDone;
         Report.Clear();
         _dryListed.Clear();
-        _justListedItem = 0; _justListedLoc = null;
+        _justListedItem = 0; _justListedLoc = null; _runPriceCache.Clear();
         _ticks = 0;
         // Build this retainer's queue and free-slot count, then enter the sell screen.
         _queue.Clear();
@@ -270,25 +271,35 @@ public sealed class ListRunner
                 // If no listing happened (manual-price branch), just move on.
                 if (_justListedItem == 0) { State = ListState.NextItem; return; }
                 // Wait until the just-listed stack has actually left its inventory slot (listing is
-                // async), so we don't mistake it for a "remaining" stack.
+                // async). This is usually near-instant, so poll quickly with a short cap.
                 var stillThere = _justListedLoc != null
                     && RetainerReader.SlotHasItem(_justListedLoc.Value.Type, _justListedLoc.Value.Slot, _justListedItem);
-                if (stillThere && _ticks < 40) { Wait(150); return; }   // give it up to ~6s
+                if (stillThere && _ticks < 12) { Wait(80); return; }   // up to ~1s, fast polling
 
-                // Now decide: are there MORE stacks of this item left to list?
+                // Decide what to do with this item now that a stack was listed.
                 var item = _justListedItem;
                 _justListedItem = 0;
                 _justListedLoc = null;
-                var more = _slotsLeft > 0 && RetainerReader.FindItemSlot(item, includeRetainer: true) != null;
-                if (more)
+
+                var stacksRemain = RetainerReader.FindItemSlot(item, includeRetainer: true) != null;
+                if (!stacksRemain)
                 {
+                    // Genuinely done with this item — nothing left in inventory.
+                    _plugin.RemoveListerItem(item);
+                    _queue.Remove(item);
+                }
+                else if (_slotsLeft > 0)
+                {
+                    // Room left on this retainer and more stacks to go — list another now.
                     if (!_queue.Contains(item)) _queue.Insert(0, item);
                     Log($"{ItemSearch.FindById(item)}: more stacks remain — listing another.");
                 }
                 else
                 {
-                    _plugin.RemoveListerItem(item);
-                    _queue.Remove(item);
+                    // Retainer is FULL but stacks remain: DO NOT remove. Keep it queued so the next
+                    // retainer continues listing it. (This was the bug that dropped items.)
+                    if (!_queue.Contains(item)) _queue.Insert(0, item);
+                    Log($"{ItemSearch.FindById(item)}: retainer full — remaining stacks roll to the next retainer.");
                 }
                 State = ListState.NextItem;
                 return;
@@ -394,6 +405,19 @@ public sealed class ListRunner
 
             case ListState.Price:
             {
+                // Fast path: if we already priced this exact item earlier in this run (e.g. a
+                // previous stack of the same 1000-item pile), reuse it — no market re-scan.
+                if (_runPriceCache.TryGetValue(_currentItem, out var cachedPrice) && cachedPrice > 0)
+                {
+                    Addons.SetPriceAndConfirm((int)Math.Min(cachedPrice, int.MaxValue));
+                    Log($"{ItemSearch.FindById(_currentItem)}: listed at {cachedPrice:N0}g (same as previous stack).");
+                    AfterListed();
+                    Addons.CloseSearchWindows();
+                    Wait(300);
+                    State = ListState.WaitStackSettle;
+                    return;
+                }
+
                 // Price source must match the chosen scope. The live in-game Compare-Prices board
                 // only shows your own world/DC — it CANNOT see region prices. So:
                 //   world scope  -> live board (most accurate for your world)
@@ -448,6 +472,7 @@ public sealed class ListRunner
                         Addons.SetPriceAndConfirm((int)Math.Min(price, int.MaxValue));
                         var extra = string.IsNullOrEmpty(_realPriceNote) ? "" : $" [{_realPriceNote}]";
                         Log($"{name}: listed at {price:N0}g ({ScopeLabel()} base {_realPriceResult:N0}){extra}.");
+                        _runPriceCache[_currentItem] = price;
                         AfterListed();
                     }
                     Addons.CloseSearchWindows();
@@ -477,6 +502,7 @@ public sealed class ListRunner
                         Addons.SetPriceAndConfirm((int)Math.Min(price, int.MaxValue));
                         var extra = string.IsNullOrEmpty(note) ? "" : $" [{note}]";
                         Log($"{name}: listed at {price:N0}g (base {basePrice:N0}){extra}.");
+                        _runPriceCache[_currentItem] = price;
                         AfterListed();
                     }
                     Addons.CloseSearchWindows();
