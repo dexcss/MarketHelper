@@ -105,6 +105,33 @@ public static unsafe class RetainerReader
         return null;
     }
 
+    /// <summary>Debug: summarize loaded RetainerPage containers and their item ids.</summary>
+    public static string DebugCountRetainerInventory()
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return "no InventoryManager";
+        var parts = new List<string>();
+        var pages = new[] { InventoryType.RetainerPage1, InventoryType.RetainerPage2,
+                            InventoryType.RetainerPage3, InventoryType.RetainerPage4,
+                            InventoryType.RetainerPage5, InventoryType.RetainerPage6,
+                            InventoryType.RetainerPage7 };
+        var total = 0;
+        var loaded = 0;
+        foreach (var type in pages)
+        {
+            var inv = im->GetInventoryContainer(type);
+            if (inv == null) continue;
+            if (!inv->IsLoaded) continue;
+            loaded++;
+            for (var i = 0; i < inv->Size; i++)
+            {
+                var slot = inv->GetInventorySlot(i);
+                if (slot != null && slot->Quantity > 0) total++;
+            }
+        }
+        return $"{loaded} page(s) loaded, {total} filled slot(s)";
+    }
+
     // ---- Item Gatherer helpers ----
 
     /// <summary>True if the given container slot currently holds the given item id (quantity &gt; 0).</summary>

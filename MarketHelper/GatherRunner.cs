@@ -229,12 +229,16 @@ public sealed class GatherRunner
                 if (Now < _deadline) return;
                 if (!Cfg.GatherFromInventory) { State = GatherState.BackToSelectString; _ticks = 0; return; }
                 if (Addons.AdvanceTalk()) { Wait(150); return; }
-                if (RetainerRetrieve.RetainerInventoryReady) { State = GatherState.InvRetrieve; _ticks = 0; return; }
+                if (RetainerRetrieve.RetainerInventoryReady)
+                {
+                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Gatherer: retainer inventory open, scanning for {_wanted.Count} item type(s).");
+                    State = GatherState.InvRetrieve; _ticks = 0; return;
+                }
                 // From the sell list we must back to SelectString, then open inventory.
                 if (Addons.IsVisible("RetainerSellList")) { Addons.CloseAddon("RetainerSellList"); Wait(500); return; }
                 if (Addons.IsVisible("SelectString"))
                 {
-                    if (Addons.OpenRetainerInventory()) { Wait(800); _ticks = 0; return; }
+                    if (Addons.OpenRetainerInventory()) { if (Cfg.Debug) _plugin.Chat("[Market Helper] Gatherer: opening retainer inventory..."); Wait(800); _ticks = 0; return; }
                 }
                 if (++_ticks > 60) { Log("Couldn't open retainer inventory; skipping."); State = GatherState.BackToSelectString; _ticks = 0; return; }
                 Wait(200);
@@ -245,7 +249,15 @@ public sealed class GatherRunner
                 if (Now < _deadline) return;
                 if (RetainerReader.PlayerBagsFull()) { State = GatherState.BackToSelectString; _ticks = 0; return; }
                 var hit = RetainerReader.FindRetainerInventoryItem(_wanted);
-                if (hit == null) { State = GatherState.BackToSelectString; _ticks = 0; return; }
+                if (hit == null)
+                {
+                    // The RetainerPage containers can lag a moment after the window opens. Retry a
+                    // few times before concluding there's nothing here.
+                    if (++_ticks <= 15) { Wait(200); return; }
+                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Gatherer: no wanted items in retainer inventory. Bags: {RetainerReader.DebugCountRetainerInventory()}.");
+                    State = GatherState.BackToSelectString; _ticks = 0; return;
+                }
+                if (Cfg.Debug) _plugin.Chat($"[Market Helper] Gatherer: found item {hit.Value.ItemId} in {hit.Value.Type} slot {hit.Value.Slot}, retrieving.");
                 if (!RetainerRetrieve.OpenInventoryItemContext(hit.Value.Type, hit.Value.Slot))
                 {
                     Log("Couldn't open inventory item context; skipping.");
