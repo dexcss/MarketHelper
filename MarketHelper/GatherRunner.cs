@@ -37,6 +37,10 @@ public sealed class GatherRunner
     private int _ticks;
     private bool _closeActed;
     private int _pulled;   // total items retrieved this run
+    private (InventoryType Type, ushort Slot)? _pendingRetrieveLoc;   // slot we're about to retrieve
+    private uint _pendingRetrieveItem;
+    private (InventoryType Type, ushort Slot)? _lastRetrievedLoc;     // slot just retrieved (settle)
+    private uint _lastRetrievedItem;
 
     private HashSet<uint> _wanted = new();
 
@@ -54,6 +58,8 @@ public sealed class GatherRunner
 
         _wanted = new HashSet<uint>(Cfg.GathererItems);
         _pulled = 0;
+        _pendingRetrieveLoc = null; _pendingRetrieveItem = 0;
+        _lastRetrievedLoc = null; _lastRetrievedItem = 0;
         _retainerIdx = -1;
         Report.Clear();
         State = GatherState.FindBell;
@@ -248,6 +254,16 @@ public sealed class GatherRunner
             {
                 if (Now < _deadline) return;
                 if (RetainerReader.PlayerBagsFull()) { State = GatherState.BackToSelectString; _ticks = 0; return; }
+                // If we just retrieved a slot, wait for it to actually clear before scanning again,
+                // so we don't re-pick the same stack mid-move.
+                if (_lastRetrievedLoc != null)
+                {
+                    var stillThere = RetainerReader.SlotHasItem(_lastRetrievedLoc.Value.Type, _lastRetrievedLoc.Value.Slot, _lastRetrievedItem);
+                    if (stillThere && _ticks < 15) { _ticks++; Wait(150); return; }
+                    _lastRetrievedLoc = null;
+                    _lastRetrievedItem = 0;
+                    _ticks = 0;
+                }
                 var hit = RetainerReader.FindRetainerInventoryItem(_wanted);
                 if (hit == null)
                 {
@@ -265,6 +281,8 @@ public sealed class GatherRunner
                     _ticks = 0;
                     return;
                 }
+                _pendingRetrieveLoc = (hit.Value.Type, hit.Value.Slot);
+                _pendingRetrieveItem = hit.Value.ItemId;
                 Wait(400);
                 State = GatherState.WaitInvCtx;
                 _ticks = 0;
@@ -278,12 +296,14 @@ public sealed class GatherRunner
                     if (RetainerRetrieve.SelectRetrieve())
                     {
                         _pulled++;
-                        Log($"Retrieved an item into your bags. ({RetainerReader.FreePlayerBagSlots()} slot(s) free)");
+                        _lastRetrievedLoc = _pendingRetrieveLoc;
+                        _lastRetrievedItem = _pendingRetrieveItem;
+                        Log($"Retrieved a stack into your bags. ({RetainerReader.FreePlayerBagSlots()} slot(s) free)");
                         Wait(600);
-                        State = GatherState.InvRetrieve;   // next item
+                        State = GatherState.InvRetrieve;   // next stack/item
                         return;
                     }
-                    Log("No 'Retrieve' entry; skipping.");
+                    Log($"No 'Retrieve' entry. Menu had: {Addons.DumpContextMenu()}");
                     Addons.CloseAddon("ContextMenu");
                     State = GatherState.BackToSelectString;
                     return;

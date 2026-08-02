@@ -20,7 +20,7 @@ public static unsafe class RetainerRetrieve
     private static string? _returnToInv;
 
     public static string RetrieveText =>
-        _retrieve ??= Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Addon>()?.GetRowOrDefault(97)?.Text.ExtractText() ?? "Retrieve";
+        _retrieve ??= Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Addon>()?.GetRowOrDefault(97)?.Text.ExtractText() ?? "Retrieve from Retainer";
 
     public static string ReturnToInventoryText =>
         _returnToInv ??= Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Addon>()?.GetRowOrDefault(98)?.Text.ExtractText() ?? "Return to Inventory";
@@ -59,7 +59,7 @@ public static unsafe class RetainerRetrieve
 
     /// <summary>Select "Retrieve" by name on the open context menu (moves item to player bags).</summary>
     public static bool SelectRetrieve()
-        => Addons.SelectContextMenuByText(RetrieveText, "Retrieve", "Retrieve All", "Retrieve Item") >= 0;
+        => Addons.SelectContextMenuByText(RetrieveText, "Retrieve from Retainer", "Retrieve", "Retrieve All", "Retrieve Item") >= 0;
 
     /// <summary>The market sell-list window (needed to pull listings back).</summary>
     public static bool RetainerSellListReady => Addons.IsReady("RetainerSellList");

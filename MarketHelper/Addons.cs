@@ -244,21 +244,39 @@ public static unsafe class Addons
         if (!ECommons.GenericHelpers.TryGetAddonMaster<ECommons.UIHelpers.AddonMasterImplementations.AddonMaster.ContextMenu>(out var m) || !m.IsAddonReady)
             return -1;
         var entries = m.Entries;
+        // Pass 1: exact (trimmed, case-insensitive) match.
         for (var i = 0; i < entries.Length; i++)
         {
             var e = entries[i];
             if (!e.Enabled) continue;
-            var text = e.Text ?? string.Empty;
+            var text = (e.Text ?? string.Empty).Trim();
             foreach (var w in wanted)
-            {
-                if (!string.IsNullOrEmpty(w) && text.Trim().Equals(w.Trim(), StringComparison.OrdinalIgnoreCase))
-                {
-                    e.Select();
-                    return i;
-                }
-            }
+                if (!string.IsNullOrEmpty(w) && text.Equals(w.Trim(), StringComparison.OrdinalIgnoreCase))
+                { e.Select(); return i; }
+        }
+        // Pass 2: contains match (handles trailing punctuation / decorations).
+        for (var i = 0; i < entries.Length; i++)
+        {
+            var e = entries[i];
+            if (!e.Enabled) continue;
+            var text = (e.Text ?? string.Empty).Trim();
+            foreach (var w in wanted)
+                if (!string.IsNullOrEmpty(w) && text.Contains(w.Trim(), StringComparison.OrdinalIgnoreCase))
+                { e.Select(); return i; }
         }
         return -1;
+    }
+
+    /// <summary>Debug: list the visible context menu entries (for diagnosing name matching).</summary>
+    public static string DumpContextMenu()
+    {
+        if (!ECommons.GenericHelpers.TryGetAddonMaster<ECommons.UIHelpers.AddonMasterImplementations.AddonMaster.ContextMenu>(out var m) || !m.IsAddonReady)
+            return "(no context menu)";
+        var entries = m.Entries;
+        var parts = new System.Collections.Generic.List<string>();
+        foreach (var e in entries)
+            parts.Add($"'{(e.Text ?? "").Trim()}'{(e.Enabled ? "" : "(disabled)")}");
+        return string.Join(", ", parts);
     }
 
     /// <summary>RetainerSellList: open the item at slot (0-based). Callback (0, slot, 1).</summary>
