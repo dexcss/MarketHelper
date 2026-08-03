@@ -63,7 +63,8 @@ public sealed class NavRunner
     private uint _lastPricedFirst;  // lowest price seen on the last completed item
     private bool _marketConfirmedEmpty; // true only when we POSITIVELY confirmed zero listings
     private volatile bool _uniPending;                    // Universalis fetch in flight (DC/region scope)
-    private List<Listing>? _uniListings;                  // converted Universalis listings for Compute    private bool _throttleBackoff;  // set when a search likely hit the game's rate limit
+    private List<Listing>? _uniListings;                  // converted Universalis listings for Compute
+    private bool _throttleBackoff;  // set when a search likely hit the game's rate limit
     private int _throttleStreak;    // consecutive throttles, to escalate the backoff
     private int _throttleRetries;   // retries of the CURRENT item due to rate-limit (reset per item)
     private const int MaxThrottleRetries = 5;
