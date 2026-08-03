@@ -62,7 +62,8 @@ public sealed class NavRunner
     private int _ticks;
     private uint _lastPricedFirst;  // lowest price seen on the last completed item
     private bool _marketConfirmedEmpty; // true only when we POSITIVELY confirmed zero listings
-    private bool _throttleBackoff;  // set when a search likely hit the game's rate limit
+    private volatile bool _uniPending;                    // Universalis fetch in flight (DC/region scope)
+    private List<Listing>? _uniListings;                  // converted Universalis listings for Compute    private bool _throttleBackoff;  // set when a search likely hit the game's rate limit
     private int _throttleStreak;    // consecutive throttles, to escalate the backoff
     private int _throttleRetries;   // retries of the CURRENT item due to rate-limit (reset per item)
     private const int MaxThrottleRetries = 5;
@@ -98,6 +99,7 @@ public sealed class NavRunner
         Report.Clear();
         _priceMemory.Clear();
         _throttleStreak = 0; _throttleBackoff = false; _marketConfirmedEmpty = false; _throttleRetries = 0;
+        _uniListings = null; _uniPending = false;
         _retainerIdx = -1;
         if (Addons.Exists("RetainerList"))
         {
@@ -136,6 +138,7 @@ public sealed class NavRunner
         Report.Clear();
         _priceMemory.Clear();
         _throttleStreak = 0; _throttleBackoff = false; _marketConfirmedEmpty = false; _throttleRetries = 0;
+        _uniListings = null; _uniPending = false;
         _postprocessMode = true;
         _onPostprocessDone = onDone;
         _postprocessStart = Now;
@@ -331,6 +334,7 @@ public sealed class NavRunner
                 break;
 
             case NavState.NextItem:
+                _uniListings = null;   // fresh Universalis fetch per item (DC/region scope)
                 if (_itemSlot >= _itemCount)
                 {
                     _ticks = 0;
@@ -607,13 +611,45 @@ public sealed class NavRunner
 
             case NavState.Price:
             {
-                var listings = MarketData.GetListings();
+                // For DC/region scope, price from Universalis (wider market) instead of the live
+                // board. Kick off the async fetch once, wait for it, then run the SAME sanity-check
+                // Compute on those listings. World scope uses the live board as before.
+                if (Cfg.UndercutPriceScope != 0 && _uniListings == null)
+                {
+                    if (!_uniPending)
+                    {
+                        _uniPending = true;
+                        var itemId = MarketData.SearchItemId();
+                        var loc = UndercutScopeLocation();
+                        var hqOnly = _openHq;
+                        var depth = Math.Max(10, Cfg.PriceSanityCheckDepth * 2);
+                        _ = System.Threading.Tasks.Task.Run(async () =>
+                        {
+                            try
+                            {
+                                var r = await Universalis.GetListingsAsync(loc, itemId, depth, hqOnly);
+                                var conv = new List<Listing>();
+                                foreach (var l in r.Listings)
+                                    conv.Add(new Listing { Price = (uint)Math.Min(l.PricePerUnit, uint.MaxValue), IsHq = l.Hq, Quantity = (uint)l.Quantity, Retainer = l.Retainer });
+                                _uniListings = conv;
+                            }
+                            catch { _uniListings = new List<Listing>(); }
+                            finally { _uniPending = false; }
+                        });
+                    }
+                    if (_uniPending) { Wait(150); return; }   // still fetching
+                }
+
+                var listings = (Cfg.UndercutPriceScope != 0 && _uniListings != null)
+                    ? _uniListings
+                    : MarketData.GetListings();
 
                 // SAFETY: if the market came back empty but we did NOT positively confirm it's
                 // genuinely empty, the search likely failed or was rate-limited ("Please wait and
                 // try your search again"). Do NOT fall back to the floor price — that dumps items
                 // at MinPriceFloor (e.g. 69g). Skip the item and leave its price untouched.
-                if (listings.Count == 0 && !_marketConfirmedEmpty)
+                // (This applies to the LIVE BOARD path only — Universalis empties are handled below.)
+                if (Cfg.UndercutPriceScope == 0 && listings.Count == 0 && !_marketConfirmedEmpty)
                 {
                     Log($"{_openItem}: market data unavailable (search may be rate-limited); leaving price unchanged, skipping.");
                     Addons.CloseSearchWindows();
@@ -621,6 +657,18 @@ public sealed class NavRunner
                     _itemSlot++;
                     _throttleBackoff = true;   // slow down subsequent searches
                     Wait(1500);                // extra pause to let the game's search limiter reset
+                    State = NavState.WaitPriceClose;
+                    return;
+                }
+                // Universalis (DC/region) returned no listings: don't risk the fallback price on a
+                // possible API hiccup — skip the item and leave its price unchanged.
+                if (Cfg.UndercutPriceScope != 0 && listings.Count == 0)
+                {
+                    Log($"{_openItem}: no {ScopeName()} listings from Universalis; leaving price unchanged, skipping.");
+                    Addons.CloseSearchWindows();
+                    Addons.CloseAddon("RetainerSell");
+                    _itemSlot++;
+                    Wait(400);
                     State = NavState.WaitPriceClose;
                     return;
                 }
@@ -882,6 +930,16 @@ public sealed class NavRunner
         var scale = Math.Clamp(Cfg.SearchPacingMs / 600f, 0.35f, 2.5f);
         _deadline = Now + (int)(ms * scale);
     }
+
+    /// <summary>Universalis location string for the configured Undercut price scope.</summary>
+    private string UndercutScopeLocation() => Cfg.UndercutPriceScope switch
+    {
+        2 => WorldInfo.CurrentRegion(),
+        1 => WorldInfo.CurrentDataCenter(),
+        _ => WorldInfo.CurrentWorld(),
+    };
+
+    private string ScopeName() => Cfg.UndercutPriceScope switch { 2 => "region", 1 => "data-center", _ => "world" };
 
     private void SetError(string msg)
     {

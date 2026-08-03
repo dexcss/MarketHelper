@@ -44,6 +44,18 @@ public partial class MainWindow
         Divider();
 
         ImGui.SetNextItemWidth(SW(160));
+        var scopeNames = new[] { "Home world (live board)", "Data center (Universalis)", "Region (Universalis)" };
+        var scope = Math.Clamp(Cfg.UndercutPriceScope, 0, 2);
+        if (ImGui.BeginCombo("Price scope", scopeNames[scope]))
+        {
+            for (var i = 0; i < scopeNames.Length; i++)
+                if (ImGui.Selectable(scopeNames[i], i == scope)) { Cfg.UndercutPriceScope = i; changed = true; }
+            ImGui.EndCombo();
+        }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Where to read competitor prices when undercutting. Home world uses the live in-game board (fastest, most accurate for your world). Data center / Region pull from Universalis to undercut across a wider market. The sanity check still applies at every scope.");
+
+        ImGui.SetNextItemWidth(SW(160));
         var floor = Cfg.MinPriceFloor;
         if (ImGui.InputInt("Fallback price", ref floor))
         { Cfg.MinPriceFloor = Math.Clamp(floor, 1, 999_999_999); changed = true; }

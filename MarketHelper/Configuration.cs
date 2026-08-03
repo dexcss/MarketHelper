@@ -109,6 +109,9 @@ public class Configuration : IPluginConfiguration
     public bool GatherFromMarket { get; set; } = true;      // pull back from active market listings
     public bool ListerPriceByDc { get; set; } = false;     // legacy; superseded by ListerPriceScope
     public int ListerPriceScope { get; set; } = 0;         // 0 = home world, 1 = data center, 2 = region
+
+    // Undercut pricing scope: 0 = home world (live board), 1 = data center, 2 = region (Universalis).
+    public int UndercutPriceScope { get; set; } = 0;
     public int ListerUndercutBy { get; set; } = 1;         // gil below the lowest
     public string ListerWorldOverride { get; set; } = "";  // manual world if auto-detect fails
     public string ListerDcOverride { get; set; } = "";     // manual DC if auto-detect fails
