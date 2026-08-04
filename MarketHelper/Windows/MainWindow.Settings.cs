@@ -41,6 +41,13 @@ public partial class MainWindow
         if (ImGui.SliderInt("Sanity check depth", ref depth, 0, 13))
         { Cfg.PriceSanityCheckDepth = depth; changed = true; }
 
+        var gap = Cfg.UndercutOutlierGapPercent;
+        ImGui.SetNextItemWidth(SW(160));
+        if (ImGui.SliderFloat("Outlier gap %", ref gap, 5f, 60f, "%.0f%%"))
+        { Cfg.UndercutOutlierGapPercent = gap; changed = true; }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("A cheapest listing is treated as a misprice and skipped only if it's this % or more below the next listing up (a clear price gap). Lower = skip more aggressively; higher = only skip extreme lowballs. Default 25%.");
+
         Divider();
 
         ImGui.SetNextItemWidth(SW(160));

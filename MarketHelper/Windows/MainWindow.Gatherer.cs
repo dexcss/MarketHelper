@@ -85,7 +85,7 @@ public partial class MainWindow
 
         Dummy(6f);
         var free = RetainerReader.FreePlayerBagSlots();
-        ImGui.TextColored(free > 0 ? Grey : Red, $"Free inventory slots: {free}");
+        ImGui.TextColored(free > 0 || free < 0 ? Grey : Red, free < 0 ? "Free inventory slots: (open to check)" : $"Free inventory slots: {free}");
 
         Dummy(4f);
         var g = _plugin.Gatherer;

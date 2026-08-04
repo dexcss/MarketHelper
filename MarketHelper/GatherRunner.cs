@@ -126,6 +126,7 @@ public sealed class GatherRunner
 
             case GatherState.NextRetainer:
                 _retainerIdx++;
+                if (Cfg.Debug) _plugin.Chat($"[Market Helper] Gatherer: NextRetainer -> index {_retainerIdx}/{_retainerCount}. RetainerList visible: {Addons.IsVisible("RetainerList")}.");
                 if (_retainerIdx >= _retainerCount)
                 {
                     _ticks = 0; _finishAfterClose = true;
@@ -136,6 +137,8 @@ public sealed class GatherRunner
                 }
                 if (!Addons.IsVisible("RetainerList"))
                 {
+                    // Not back at the list yet — go close out first, then retry this retainer.
+                    if (Cfg.Debug) _plugin.Chat("[Market Helper] Gatherer: RetainerList not visible at NextRetainer; closing out first.");
                     _retainerIdx--; _ticks = 0; _closeActed = false;
                     State = GatherState.CloseRetainer;
                     return;

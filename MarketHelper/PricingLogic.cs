@@ -57,33 +57,39 @@ public static class PricingLogic
 
         var target = 0;             // index into listings (0-based; SND used 1-based)
         var depth = Math.Min(cfg.PriceSanityCheckDepth, listings.Count);
-        var maxChecks = depth * 2;
-        var checks = 0;
 
-        // --- Sanity checking: skip listings priced below half the trimmed mean (likely misprices),
-        //     respecting HQ/NQ matching. ---
-        if (cfg.PriceSanityChecking && historyTrimmedMean > 0)
+        // --- Sanity checking: skip obvious mispriced lowballs. A cheapest listing is skipped ONLY
+        //     when it sits far below the NEXT listing up (a clear gap = misprice), so genuine cheap
+        //     competition is still undercut normally. We never skip past `depth` listings, and we
+        //     stop at the first "clustered" price. HQ/NQ mismatches are also stepped over. ---
+        if (cfg.PriceSanityChecking && listings.Count > 1)
         {
-            while (target < depth && checks < maxChecks)
+            var gap = Math.Max(0f, cfg.UndercutOutlierGapPercent) / 100f;
+            while (target < depth - 1 && target < listings.Count - 1)
             {
-                checks++;
-                var l = listings[target];
+                var cur = listings[target];
 
-                if (l.Price <= (historyTrimmedMean / 2))
+                // Step over HQ/NQ mismatches without counting them as the base.
+                if (cfg.CheckForHq && cur.IsHq != itemIsHq)
                 {
-                    // Below sanity threshold.
-                    if (cfg.CheckForHq && (l.IsHq != itemIsHq))
-                    {
-                        target++;
-                        if (target >= depth) { target = 0; break; }
-                        continue;
-                    }
-                    res.SanityTriggered = true;
                     target++;
-                    if (target >= depth) { target = 0; break; }
                     continue;
                 }
-                break;
+
+                var next = listings[target + 1];
+                // Is this listing an obvious outlier — far below the next one up?
+                // e.g. 317 vs 462 => (462-317)/462 = 31% >= 25% gap => skip 317.
+                if (next.Price > 0 && cur.Price < next.Price)
+                {
+                    var drop = (double)(next.Price - cur.Price) / next.Price;
+                    if (drop >= gap)
+                    {
+                        res.SanityTriggered = true;
+                        target++;
+                        continue;
+                    }
+                }
+                break;   // clustered price — this is our base
             }
         }
 

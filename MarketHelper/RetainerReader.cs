@@ -149,24 +149,32 @@ public static unsafe class RetainerReader
     public static int FreePlayerBagSlots()
     {
         var im = InventoryManager.Instance();
-        if (im == null) return 0;
+        if (im == null) return -1;   // unknown, not "full"
         var free = 0;
+        var anyLoaded = false;
         foreach (var type in new[] { InventoryType.Inventory1, InventoryType.Inventory2,
                                      InventoryType.Inventory3, InventoryType.Inventory4 })
         {
             var inv = im->GetInventoryContainer(type);
             if (inv == null || !inv->IsLoaded) continue;
+            anyLoaded = true;
             for (var i = 0; i < inv->Size; i++)
             {
                 var slot = inv->GetInventorySlot(i);
                 if (slot == null || slot->ItemId == 0 || slot->Quantity == 0) free++;
             }
         }
-        return free;
+        // If NONE of the bags were readable, we can't tell — return -1 (unknown), never 0 (full),
+        // so a transient not-loaded state during retainer transitions doesn't look like "bags full".
+        return anyLoaded ? free : -1;
     }
 
-    /// <summary>True if the player's main bags have no free slots.</summary>
-    public static bool PlayerBagsFull() => FreePlayerBagSlots() <= 0;
+    /// <summary>True only when bags are CONFIRMED full (readable and zero free). Unknown =&gt; false.</summary>
+    public static bool PlayerBagsFull()
+    {
+        var free = FreePlayerBagSlots();
+        return free == 0;   // -1 (unknown) is NOT full
+    }
 
     /// <summary>
     /// Find the first slot in the retainer's INVENTORY (RetainerPage1-7) holding one of the given

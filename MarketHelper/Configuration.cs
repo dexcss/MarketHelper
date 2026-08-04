@@ -27,6 +27,9 @@ public class Configuration : IPluginConfiguration
     // --- Price sanity checking ---
     public bool PriceSanityChecking { get; set; } = true;
     public int PriceSanityCheckDepth { get; set; } = 10;       // 0-13 top listings to scan
+    // A cheapest listing is treated as an obvious misprice and skipped only if it's this % or more
+    // below the NEXT listing up (a clear price gap). Conservative default: 25%.
+    public float UndercutOutlierGapPercent { get; set; } = 25.0f;
 
     // --- Overrides ---
     public bool UsingOverrides { get; set; } = true;
