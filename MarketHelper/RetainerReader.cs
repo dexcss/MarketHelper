@@ -132,6 +132,30 @@ public static unsafe class RetainerReader
         return $"{loaded} page(s) loaded, {total} filled slot(s)";
     }
 
+    /// <summary>
+    /// Find the first slot in the PLAYER's inventory (Inventory1-4) holding one of the given item
+    /// ids. Returns (container, slot, itemId) or null. Used by manual deposit/entrust.
+    /// </summary>
+    public static (InventoryType Type, ushort Slot, uint ItemId)? FindPlayerInventoryItem(HashSet<uint> wanted)
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return null;
+        foreach (var type in new[] { InventoryType.Inventory1, InventoryType.Inventory2,
+                                     InventoryType.Inventory3, InventoryType.Inventory4 })
+        {
+            var inv = im->GetInventoryContainer(type);
+            if (inv == null || !inv->IsLoaded) continue;
+            for (var i = 0; i < inv->Size; i++)
+            {
+                var slot = inv->GetInventorySlot(i);
+                if (slot == null || slot->Quantity == 0) continue;
+                if (wanted.Contains(slot->ItemId))
+                    return (type, (ushort)i, slot->ItemId);
+            }
+        }
+        return null;
+    }
+
     // ---- Item Gatherer helpers ----
 
     /// <summary>True if the given container slot currently holds the given item id (quantity &gt; 0).</summary>

@@ -40,6 +40,10 @@ public static unsafe class Addons
 
     public static bool Exists(string name) => GetAddon(name) != null;
 
+    /// <summary>The FC chest inventory window.</summary>
+    public static bool IsFcChestOpen() => IsReady("FreeCompanyChest");
+    public static string FcChestAddonName() => "FreeCompanyChest";
+
     // ---- RetainerSell: the single-item sell window ----
 
     public static AddonRetainerSell* GetRetainerSell() => (AddonRetainerSell*)GetAddon("RetainerSell");

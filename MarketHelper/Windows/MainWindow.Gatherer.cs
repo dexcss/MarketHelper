@@ -105,5 +105,38 @@ public partial class MainWindow
             ImGui.SameLine(0, SW(8));
             ImGui.TextColored(Grey, g.Status);
         }
+
+        Dummy(6f);
+        ImGui.Separator();
+        ImGui.TextColored(Grey, "Manual actions (operate on the window you already have open):");
+        Dummy(2f);
+        var m = _plugin.Manual;
+        using (ImRaiiDisabled(m.Running || Cfg.GathererItems.Count == 0))
+        {
+            if (ImGui.Button("Withdraw all (from open retainer)", new Vector2(SW(280), 0)))
+                m.Start(ManualMode.WithdrawAll);
+            HelpMarkerLine("Open a retainer's inventory yourself, then click to pull all your listed items from it into your bags.");
+
+            if (ImGui.Button("Deposit all → open retainer", new Vector2(SW(280), 0)))
+                m.Start(ManualMode.DepositRetainer);
+            HelpMarkerLine("Open a retainer's inventory, then click to entrust all your listed items from your bags into it.");
+
+            if (ImGui.Button("Deposit all → FC chest", new Vector2(SW(280), 0)))
+                m.Start(ManualMode.DepositFc);
+            HelpMarkerLine("Open your Free Company chest, then click to deposit all your listed items from your bags into it.");
+        }
+        if (m.Running)
+        {
+            ImGui.SameLine(0, SW(8));
+            if (ImGui.Button("Stop##manual", new Vector2(SW(80), 0))) m.Stop();
+        }
+        if (!string.IsNullOrEmpty(m.Status) && m.Status != "Idle.")
+            ImGui.TextColored(m.Running ? Gold : Grey, m.Status);
+    }
+
+    private static void HelpMarkerLine(string text)
+    {
+        ImGui.SameLine(0, SW(6));
+        HelpMarker(text);
     }
 }
