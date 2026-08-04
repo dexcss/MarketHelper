@@ -75,7 +75,7 @@ public static unsafe class RetainerRetrieve
     public static bool SelectReturnToInventory()
         => Addons.SelectContextMenuByText(ReturnToInventoryText, "Return to Inventory", "Return") >= 0;
 
-    // ---- Deposit / entrust (player inventory -> retainer or FC chest) ----
+    // ---- Deposit / entrust (player inventory -> retainer) ----
 
     /// <summary>Open the context menu for a PLAYER inventory item slot (for entrust/deposit).</summary>
     public static bool OpenPlayerItemContext(InventoryType type, ushort slot, string ownerAddon)
@@ -84,8 +84,4 @@ public static unsafe class RetainerRetrieve
     /// <summary>Select "Entrust to Retainer" by name (moves a player item into the retainer).</summary>
     public static bool SelectEntrustToRetainer()
         => Addons.SelectContextMenuByText("Entrust to Retainer", "Entrust", "Entrust All", "Entrust Item") >= 0;
-
-    /// <summary>Select the FC-chest deposit entry by name (moves a player item into the FC chest).</summary>
-    public static bool SelectDepositFreeCompany()
-        => Addons.SelectContextMenuByText("Deposit", "Deposit Item", "Put Away") >= 0;
 }

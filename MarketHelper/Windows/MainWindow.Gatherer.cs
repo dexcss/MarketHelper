@@ -120,10 +120,6 @@ public partial class MainWindow
             if (ImGui.Button("Deposit all → open retainer", new Vector2(SW(280), 0)))
                 m.Start(ManualMode.DepositRetainer);
             HelpMarkerLine("Open a retainer's inventory, then click to entrust all your listed items from your bags into it.");
-
-            if (ImGui.Button("Deposit all → FC chest", new Vector2(SW(280), 0)))
-                m.Start(ManualMode.DepositFc);
-            HelpMarkerLine("Open your Free Company chest, then click to deposit all your listed items from your bags into it.");
         }
         if (m.Running)
         {

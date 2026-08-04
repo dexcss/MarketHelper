@@ -316,33 +316,54 @@ public sealed class GatherRunner
 
             // ---- Back out to the retainer list and move on ----
             case GatherState.BackToSelectString:
-                if (Now < _deadline) return;
-                if (Addons.AdvanceTalk()) { Wait(150); return; }
-                if (Addons.IsVisible("InventoryRetainer")) { Addons.CloseAddon("InventoryRetainer"); Wait(400); return; }
-                if (Addons.IsVisible("InventoryRetainerLarge")) { Addons.CloseAddon("InventoryRetainerLarge"); Wait(400); return; }
-                if (Addons.IsVisible("RetainerSellList")) { Addons.CloseAddon("RetainerSellList"); Wait(400); return; }
+                // All window-closing is now handled by the robust CloseRetainer path.
                 _ticks = 0; _closeActed = false;
                 State = GatherState.CloseRetainer;
                 break;
 
             case GatherState.CloseRetainer:
                 if (Now < _deadline) return;
-                if (Addons.AdvanceTalk()) { Wait(150); return; }
+
                 if (Addons.IsVisible("RetainerList"))
                 {
-                    // Already back at the list.
-                    if (_finishAfterClose) { State = GatherState.WaitClosed; _ticks = 0; return; }
+                    _ticks = 0; _closeActed = false;
+                    if (_finishAfterClose) { State = GatherState.WaitClosed; return; }
                     State = GatherState.NextRetainer;
                     return;
                 }
-                if (!_closeActed && Addons.IsVisible("SelectString"))
+
+                if (Addons.AdvanceTalk()) { Wait(200); break; }
+
+                if (!_closeActed)
                 {
-                    Addons.QuitRetainer();
-                    _closeActed = true;
-                    Wait(600);
+                    // Close whatever retainer sub-window is open, ONE action at a time, then Quit
+                    // from the SelectString menu. Handles the retainer INVENTORY windows too (the
+                    // Gatherer opens those, unlike the Undercut walk).
+                    if (Addons.IsVisible("InventoryRetainer")) { Addons.CloseAddon("InventoryRetainer"); _closeActed = true; Wait(600); break; }
+                    if (Addons.IsVisible("InventoryRetainerLarge")) { Addons.CloseAddon("InventoryRetainerLarge"); _closeActed = true; Wait(600); break; }
+                    if (Addons.IsVisible("RetainerSellList")) { Addons.CloseAddon("RetainerSellList"); _closeActed = true; Wait(600); break; }
+                    if (Addons.IsVisible("RetainerSell")) { Addons.CloseAddon("RetainerSell"); _closeActed = true; Wait(400); break; }
+                    if (Addons.IsVisible("SelectString")) { Addons.QuitRetainer(); _closeActed = true; Wait(800); break; }
+                    // Nothing recognized yet — mid-transition; wait.
+                    Wait(200);
+                    break;
+                }
+
+                // We acted; if a sub-window is up again, allow another action next tick.
+                if (Addons.IsVisible("InventoryRetainer") || Addons.IsVisible("InventoryRetainerLarge")
+                    || Addons.IsVisible("SelectString") || Addons.IsVisible("RetainerSellList")
+                    || Addons.IsVisible("RetainerSell"))
+                {
+                    _closeActed = false;
+                    break;
+                }
+
+                if (++_ticks > 100)
+                {
+                    if (Cfg.Debug) _plugin.Chat("[Market Helper] Gatherer: couldn't return to retainer list; releasing.");
+                    SetError("Couldn't return to the retainer list.");
                     return;
                 }
-                if (++_ticks > 80) { SetError("Couldn't return to the retainer list."); return; }
                 Wait(200);
                 break;
 

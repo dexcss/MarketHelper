@@ -5,14 +5,13 @@ using FFXIVClientStructs.FFXIV.Client.Game;
 
 namespace MarketHelper;
 
-public enum ManualMode { None, WithdrawAll, DepositRetainer, DepositFc }
+public enum ManualMode { None, WithdrawAll, DepositRetainer }
 public enum ManualState { Idle, Act, WaitCtx, Settle, Done, Error }
 
 /// <summary>
 /// Manual, no-navigation transfers on whatever window is ALREADY open:
 ///  - WithdrawAll: pull all gather-list items from the open retainer inventory into your bags.
 ///  - DepositRetainer: entrust all gather-list items from your bags into the open retainer.
-///  - DepositFc: deposit all gather-list items from your bags into the open FC chest.
 /// Uses the same safe context-menu-by-name path. Does NOT walk the bell — you open the window.
 /// </summary>
 public sealed class ManualTransfer
@@ -48,8 +47,6 @@ public sealed class ManualTransfer
                 Fail("Open a retainer's inventory first."); return;
             case ManualMode.DepositRetainer when !RetainerRetrieve.RetainerInventoryReady:
                 Fail("Open a retainer's inventory first."); return;
-            case ManualMode.DepositFc when !Addons.IsFcChestOpen():
-                Fail("Open the Free Company chest first."); return;
         }
         Mode = mode;
         _wanted = new HashSet<uint>(Cfg.GathererItems);
@@ -60,7 +57,6 @@ public sealed class ManualTransfer
         {
             ManualMode.WithdrawAll => "Withdrawing items...",
             ManualMode.DepositRetainer => "Entrusting items to retainer...",
-            ManualMode.DepositFc => "Depositing items to FC chest...",
             _ => "Working...",
         };
     }
@@ -100,11 +96,11 @@ public sealed class ManualTransfer
                     { Done($"Couldn't open item menu. Withdrew {_moved} stack(s)."); return; }
                     _pendingLoc = (hit.Value.Type, hit.Value.Slot); _pendingItem = hit.Value.ItemId;
                 }
-                else // DepositRetainer or DepositFc: source is player inventory
+                else // DepositRetainer: source is player inventory
                 {
                     var hit = RetainerReader.FindPlayerInventoryItem(_wanted);
                     if (hit == null) { Done($"Deposited {_moved} stack(s)."); return; }
-                    var owner = Mode == ManualMode.DepositFc ? Addons.FcChestAddonName() : RetainerRetrieve.InventoryAddonNamePublic;
+                    var owner = RetainerRetrieve.InventoryAddonNamePublic;
                     if (!RetainerRetrieve.OpenPlayerItemContext(hit.Value.Type, hit.Value.Slot, owner))
                     { Done($"Couldn't open item menu. Deposited {_moved} stack(s)."); return; }
                     _pendingLoc = (hit.Value.Type, hit.Value.Slot); _pendingItem = hit.Value.ItemId;
@@ -123,7 +119,6 @@ public sealed class ManualTransfer
                     {
                         ManualMode.WithdrawAll => RetainerRetrieve.SelectRetrieve(),
                         ManualMode.DepositRetainer => RetainerRetrieve.SelectEntrustToRetainer(),
-                        ManualMode.DepositFc => RetainerRetrieve.SelectDepositFreeCompany(),
                         _ => false,
                     };
                     if (ok)
