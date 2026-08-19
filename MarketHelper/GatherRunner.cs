@@ -37,6 +37,7 @@ public sealed class GatherRunner
     private int _ticks;
     private bool _closeActed;
     private int _pulled;   // total items retrieved this run
+    private int _bagsFullStreak;   // consecutive confirmed-full reads (debounce)
     private (InventoryType Type, ushort Slot)? _pendingRetrieveLoc;   // slot we're about to retrieve
     private uint _pendingRetrieveItem;
     private (InventoryType Type, ushort Slot)? _lastRetrievedLoc;     // slot just retrieved (settle)
@@ -57,7 +58,7 @@ public sealed class GatherRunner
         if (RetainerReader.PlayerBagsFull()) { SetError("Your inventory is already full — empty it first."); return; }
 
         _wanted = new HashSet<uint>(Cfg.GathererItems);
-        _pulled = 0;
+        _pulled = 0; _bagsFullStreak = 0;
         _pendingRetrieveLoc = null; _pendingRetrieveItem = 0;
         _lastRetrievedLoc = null; _lastRetrievedItem = 0;
         _retainerIdx = -1;
@@ -81,15 +82,25 @@ public sealed class GatherRunner
 
     private void Step()
     {
-        // Global stop condition: bags full.
+        // Global stop condition: bags CONFIRMED full. Debounced — a single transient bad read
+        // (which happens during retainer window transitions) must not cancel the whole run, so we
+        // require the "full" reading to persist across consecutive checks before stopping.
         if (Running && State is not (GatherState.CloseRetainer or GatherState.WaitClosed
-                or GatherState.BackToSelectString) && RetainerReader.PlayerBagsFull())
+                or GatherState.BackToSelectString))
         {
-            Log($"Inventory full — stopping. Pulled {_pulled} item(s). Empty your bags and run again.");
-            _ticks = 0; _closeActed = false;
-            State = GatherState.CloseRetainer;
-            _finishAfterClose = true;
-            return;
+            if (RetainerReader.PlayerBagsFull())
+            {
+                _bagsFullStreak++;
+                if (_bagsFullStreak >= 3)
+                {
+                    Log($"Inventory full — stopping. Pulled {_pulled} item(s). Empty your bags and run again.");
+                    _ticks = 0; _closeActed = false; _bagsFullStreak = 0;
+                    State = GatherState.CloseRetainer;
+                    _finishAfterClose = true;
+                    return;
+                }
+            }
+            else _bagsFullStreak = 0;
         }
 
         switch (State)
@@ -240,7 +251,9 @@ public sealed class GatherRunner
                 if (Addons.AdvanceTalk()) { Wait(150); return; }
                 if (RetainerRetrieve.RetainerInventoryReady)
                 {
-                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Gatherer: retainer inventory open, scanning for {_wanted.Count} item type(s).");
+                    // Fresh retainer inventory — clear any settle-tracking left from the previous one.
+                    _lastRetrievedLoc = null; _lastRetrievedItem = 0;
+                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Gatherer: retainer {_retainerIdx + 1} inventory open, scanning for {_wanted.Count} item type(s).");
                     State = GatherState.InvRetrieve; _ticks = 0; return;
                 }
                 // From the sell list we must back to SelectString, then open inventory.
@@ -257,12 +270,13 @@ public sealed class GatherRunner
             {
                 if (Now < _deadline) return;
                 if (RetainerReader.PlayerBagsFull()) { State = GatherState.BackToSelectString; _ticks = 0; return; }
-                // If we just retrieved a slot, wait for it to actually clear before scanning again,
-                // so we don't re-pick the same stack mid-move.
+                // If we just retrieved a slot (this retainer), wait for it to clear before scanning
+                // again so we don't re-pick the same stack mid-move. Only trust this within the
+                // current retainer — it's cleared on entry to a new retainer's inventory.
                 if (_lastRetrievedLoc != null)
                 {
                     var stillThere = RetainerReader.SlotHasItem(_lastRetrievedLoc.Value.Type, _lastRetrievedLoc.Value.Slot, _lastRetrievedItem);
-                    if (stillThere && _ticks < 15) { _ticks++; Wait(150); return; }
+                    if (stillThere && _ticks < 15) { _ticks++; Wait(100); return; }
                     _lastRetrievedLoc = null;
                     _lastRetrievedItem = 0;
                     _ticks = 0;
@@ -270,10 +284,10 @@ public sealed class GatherRunner
                 var hit = RetainerReader.FindRetainerInventoryItem(_wanted);
                 if (hit == null)
                 {
-                    // The RetainerPage containers can lag a moment after the window opens. Retry a
-                    // few times before concluding there's nothing here.
-                    if (++_ticks <= 15) { Wait(200); return; }
-                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Gatherer: no wanted items in retainer inventory. Bags: {RetainerReader.DebugCountRetainerInventory()}.");
+                    // The RetainerPage containers can lag after the window opens (longer on 2nd+
+                    // retainers). Retry generously before concluding there's nothing here.
+                    if (++_ticks <= 25) { Wait(200); return; }
+                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Gatherer: retainer {_retainerIdx + 1}: no wanted items. {RetainerReader.DebugCountRetainerInventory()}.");
                     State = GatherState.BackToSelectString; _ticks = 0; return;
                 }
                 if (Cfg.Debug) _plugin.Chat($"[Market Helper] Gatherer: found item {hit.Value.ItemId} in {hit.Value.Type} slot {hit.Value.Slot}, retrieving.");
@@ -286,7 +300,7 @@ public sealed class GatherRunner
                 }
                 _pendingRetrieveLoc = (hit.Value.Type, hit.Value.Slot);
                 _pendingRetrieveItem = hit.Value.ItemId;
-                Wait(400);
+                Wait(200);
                 State = GatherState.WaitInvCtx;
                 _ticks = 0;
                 break;
@@ -302,7 +316,7 @@ public sealed class GatherRunner
                         _lastRetrievedLoc = _pendingRetrieveLoc;
                         _lastRetrievedItem = _pendingRetrieveItem;
                         Log($"Retrieved a stack into your bags. ({RetainerReader.FreePlayerBagSlots()} slot(s) free)");
-                        Wait(600);
+                        Wait(300);
                         State = GatherState.InvRetrieve;   // next stack/item
                         return;
                     }

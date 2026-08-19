@@ -82,7 +82,7 @@ public sealed class ManualTransfer
                 if (_lastLoc != null)
                 {
                     var still = RetainerReader.SlotHasItem(_lastLoc.Value.Type, _lastLoc.Value.Slot, _lastItem);
-                    if (still && _ticks < 15) { _ticks++; Wait(120); return; }
+                    if (still && _ticks < 15) { _ticks++; Wait(90); return; }
                     _lastLoc = null; _lastItem = 0; _ticks = 0;
                 }
 
@@ -105,7 +105,7 @@ public sealed class ManualTransfer
                     { Done($"Couldn't open item menu. Deposited {_moved} stack(s)."); return; }
                     _pendingLoc = (hit.Value.Type, hit.Value.Slot); _pendingItem = hit.Value.ItemId;
                 }
-                Wait(350);
+                Wait(200);
                 State = ManualState.WaitCtx;
                 _ticks = 0;
                 break;
@@ -126,7 +126,7 @@ public sealed class ManualTransfer
                         _moved++;
                         _lastLoc = _pendingLoc; _lastItem = _pendingItem;
                         if (Cfg.Debug) _plugin.Chat($"[Market Helper] Manual: moved item {_pendingItem} ({_moved} total).");
-                        Wait(500);
+                        Wait(250);
                         State = ManualState.Act;
                         return;
                     }
