@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using ECommons.DalamudServices;
@@ -21,6 +22,8 @@ public partial class MainWindow
         DrawBuyerAddRow();
         Divider();
         DrawBuyerList();
+        Divider();
+        DrawBuyerScope();
         Divider();
         DrawBuyerActions();
         Divider();
@@ -155,6 +158,126 @@ public partial class MainWindow
         }
     }
 
+    // ---- scan scope ---------------------------------------------------------------------------
+
+    private void DrawBuyerScope()
+    {
+        var chosen = Cfg.BuyerDataCenters;
+        var here = WorldInfo.CurrentDataCenter();
+        var hereWorld = WorldInfo.CurrentWorld();
+        var hereRegion = WorldInfo.CurrentRegion();
+
+        ImGui.Text("Scan scope:");
+        ImGui.SameLine();
+        ImGui.TextColored(Grey, string.IsNullOrEmpty(hereWorld)
+            ? "(location unknown)"
+            : $"{hereWorld} / {here} / {hereRegion}");
+
+        var mode = Math.Clamp(Cfg.BuyerScopeMode, 0, 3);
+        if (ImGui.RadioButton("My world", ref mode, 0)) { Cfg.BuyerScopeMode = 0; Cfg.Save(); }
+        ImGui.SameLine();
+        if (ImGui.RadioButton("My Data Center", ref mode, 1)) { Cfg.BuyerScopeMode = 1; Cfg.Save(); }
+        ImGui.SameLine();
+        if (ImGui.RadioButton("My whole Region", ref mode, 2)) { Cfg.BuyerScopeMode = 2; Cfg.Save(); }
+        ImGui.SameLine();
+        if (ImGui.RadioButton("Custom", ref mode, 3)) { Cfg.BuyerScopeMode = 3; Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Where to look for listings. My world = no travel at all. My Data Center = anywhere you can visit freely. My whole Region = every DC you can reach, which means data-center transfers. Custom = tick exactly the DCs you want.");
+
+        if (mode == 3)
+        {
+            Dummy(4f);
+            var showAll = Cfg.BuyerShowAllRegions;
+            if (ImGui.Checkbox("Show data centers outside my region", ref showAll)) { Cfg.BuyerShowAllRegions = showAll; Cfg.Save(); }
+            ImGui.SameLine(0, SW(6));
+            HelpMarker("You can't travel outside your region, so these are for price-watching only. The Buyer will scan them but can't reach them to buy.");
+
+            var dcs = showAll
+                ? WorldInfo.AllDataCenters()
+                : WorldInfo.DataCentersInRegion(WorldInfo.CurrentRegionId());
+            if (dcs.Count == 0) dcs = WorldInfo.AllDataCenters();
+
+            Dummy(2f);
+            if (ImGui.Button("All##dcall", new Vector2(SW(70), 0)))
+            {
+                foreach (var dc in dcs) if (!chosen.Contains(dc)) chosen.Add(dc);
+                Cfg.Save();
+            }
+            ImGui.SameLine(0, SW(6));
+            if (ImGui.Button("None##dcnone", new Vector2(SW(70), 0))) { chosen.Clear(); Cfg.Save(); }
+            ImGui.SameLine(0, SW(6));
+            if (ImGui.Button("Just mine##dcmine", new Vector2(SW(90), 0)))
+            {
+                chosen.Clear();
+                if (!string.IsNullOrWhiteSpace(here)) chosen.Add(here);
+                Cfg.Save();
+            }
+
+            Dummy(2f);
+            if (ImGui.BeginChild("##buyerscope", new Vector2(0, SW(150)), true))
+            {
+                foreach (var dc in dcs)
+                {
+                    var on = chosen.Contains(dc);
+                    if (ImGui.Checkbox($"{dc}{(string.Equals(dc, here, StringComparison.OrdinalIgnoreCase) ? "  (you are here)" : "")}##dc{dc}", ref on))
+                    {
+                        if (on) { if (!chosen.Contains(dc)) chosen.Add(dc); }
+                        else chosen.Remove(dc);
+                        Cfg.Save();
+                    }
+
+                    if (!on) continue;
+                    DrawWorldOptOuts(dc);
+                }
+            }
+            ImGui.EndChild();
+        }
+        else
+        {
+            Dummy(4f);
+            // Per-world opt-outs still apply outside Custom mode — collapsed so they stay out of
+            // the way until you want them.
+            if (ImGui.TreeNode("Skip individual worlds##buyerskip"))
+            {
+                var dcs = mode == 2
+                    ? WorldInfo.DataCentersInRegion(WorldInfo.CurrentRegionId())
+                    : new List<string> { here };
+                foreach (var dc in dcs.Where(d => !string.IsNullOrWhiteSpace(d)))
+                {
+                    ImGui.TextColored(Grey, dc);
+                    DrawWorldOptOuts(dc);
+                }
+                ImGui.TreePop();
+            }
+        }
+
+        var label = string.Join(", ", _plugin.Buyer.ResolveLocations());
+        WrapText(Grey, $"Will scan: {(string.IsNullOrWhiteSpace(label) ? "(nothing)" : label)}");
+        if (Cfg.BuyerExcludedWorlds.Count > 0)
+            WrapText(Grey, $"Skipping {Cfg.BuyerExcludedWorlds.Count} world(s): {string.Join(", ", Cfg.BuyerExcludedWorlds)}");
+    }
+
+    /// <summary>Per-world include/exclude checkboxes for one data center.</summary>
+    private void DrawWorldOptOuts(string dc)
+    {
+        ImGui.Indent(SW(18));
+        if (ImGui.TreeNode($"worlds##w{dc}"))
+        {
+            foreach (var world in WorldInfo.WorldsOnDataCenter(dc))
+            {
+                var included = !Cfg.BuyerExcludedWorlds.Contains(world, StringComparer.OrdinalIgnoreCase);
+                if (ImGui.Checkbox($"{world}##world{world}", ref included))
+                {
+                    if (included) Cfg.BuyerExcludedWorlds.RemoveAll(w => string.Equals(w, world, StringComparison.OrdinalIgnoreCase));
+                    else if (!Cfg.BuyerExcludedWorlds.Contains(world, StringComparer.OrdinalIgnoreCase)) Cfg.BuyerExcludedWorlds.Add(world);
+                    Cfg.Save();
+                }
+            }
+            ImGui.TreePop();
+        }
+        ImGui.Unindent(SW(18));
+    }
+
     // ---- scan / send --------------------------------------------------------------------------
 
     private void DrawBuyerActions()
@@ -200,6 +323,8 @@ public partial class MainWindow
             ImGui.SameLine(0, SW(8));
         }
         ImGui.TextColored(buyer.Scanning ? Gold : Grey, buyer.Status);
+        if (!string.IsNullOrEmpty(buyer.Error) && !buyer.Scanning)
+            WrapText(Red, buyer.Error!);
 
         if (runner.Running || runner.State == BuyState.Error || runner.State == BuyState.Done)
         {
@@ -220,14 +345,11 @@ public partial class MainWindow
     {
         if (!ImGui.CollapsingHeader("Buyer settings")) return;
 
-        var region = Cfg.BuyerScanRegion;
-        if (ImGui.Checkbox("Scan the whole region instead of my data center", ref region)) { Cfg.BuyerScanRegion = region; Cfg.Save(); }
-        ImGui.SameLine(0, SW(6));
-        HelpMarker("Off = your own DC (e.g. Aether). On = the whole region, which finds cheaper listings but means cross-DC travel and much longer runs.");
-
-        var scope = Cfg.BuyerScopeOverride;
+        var delay = Cfg.BuyerScanDelayMs;
         ImGui.SetNextItemWidth(SW(180));
-        if (ImGui.InputTextWithHint("Scope override", "blank = auto", ref scope, 40)) { Cfg.BuyerScopeOverride = scope; Cfg.Save(); }
+        if (ImGui.InputInt("Gap between Universalis calls (ms)", ref delay, 20)) { Cfg.BuyerScanDelayMs = Math.Clamp(delay, 0, 2000); Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Scanning several data centers means one call per item per DC. A small gap keeps Universalis happy; raise it if you see lookup failures.");
 
         var overshoot = Cfg.BuyerAllowOvershoot;
         if (ImGui.Checkbox("Buy oversized stacks", ref overshoot)) { Cfg.BuyerAllowOvershoot = overshoot; Cfg.Save(); }

@@ -125,13 +125,18 @@ public sealed class BuyRunner
                 }
                 _stop = _plan.Stops[_stopIdx];
                 var here = WorldInfo.CurrentWorld();
-                Log($"Stop {_stopIdx + 1}/{_plan.Stops.Count}: {_stop.World} — {_stop.TotalUnits} unit(s), about {_stop.TotalCost:N0}g.");
+                var hereDc = WorldInfo.CurrentDataCenter();
+                Log($"Stop {_stopIdx + 1}/{_plan.Stops.Count}: {_stop.World}{(string.IsNullOrWhiteSpace(_stop.DataCenter) ? "" : $" [{_stop.DataCenter}]")} — {_stop.TotalUnits} unit(s), about {_stop.TotalCost:N0}g.");
 
                 if (string.Equals(here, _stop.World, StringComparison.OrdinalIgnoreCase))
                 {
                     State = BuyState.FindBoard;
                     return;
                 }
+                if (!string.IsNullOrWhiteSpace(_stop.DataCenter)
+                    && !string.IsNullOrWhiteSpace(hereDc)
+                    && !string.Equals(hereDc, _stop.DataCenter, StringComparison.OrdinalIgnoreCase))
+                    Log($"Data-center transfer: {hereDc} -> {_stop.DataCenter}. This one can queue for a while.");
                 State = BuyState.Travel;
                 return;
             }

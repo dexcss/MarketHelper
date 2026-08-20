@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using ECommons.DalamudServices;
@@ -73,5 +74,77 @@ public static class WorldInfo
         var dc = Player.Object.CurrentWorld.Value.DataCenter;
         var regionId = dc.ValueNullable?.Region.RowId ?? 0;
         return RegionNames.TryGetValue(regionId, out var name) ? name : string.Empty;
+    }
+
+    /// <summary>The player's current region id (1=Japan, 2=NA, 3=EU, 4=Oceania), or 0.</summary>
+    public static uint CurrentRegionId()
+    {
+        if (!Player.Available) return 0;
+        var dc = Player.Object.CurrentWorld.Value.DataCenter;
+        return dc.ValueNullable?.Region.RowId ?? 0;
+    }
+
+    /// <summary>Region id for a named data center, or 0 if unknown.</summary>
+    public static uint RegionIdOfDataCenter(string dcName)
+    {
+        var worlds = Svc.Data.GetExcelSheet<World>();
+        if (worlds == null) return 0;
+        foreach (var w in worlds)
+        {
+            if (!w.IsPublic || w.DataCenter.RowId == 0) continue;
+            var dc = w.DataCenter.ValueNullable;
+            if (dc == null) continue;
+            if (dc.Value.Name.ExtractText() == dcName) return dc.Value.Region.RowId;
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Public data centers in the given region, e.g. region 2 (North America) yields Aether,
+    /// Crystal, Dynamis and Primal. These are the DCs a character in that region can travel to.
+    /// </summary>
+    public static List<string> DataCentersInRegion(uint regionId)
+    {
+        var worlds = Svc.Data.GetExcelSheet<World>();
+        if (worlds == null) return new List<string>();
+        return worlds
+            .Where(w => w.IsPublic && w.DataCenter.RowId != 0
+                        && (w.DataCenter.ValueNullable?.Region.RowId ?? 0) == regionId)
+            .Select(w => w.DataCenter.ValueNullable?.Name.ExtractText() ?? string.Empty)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct()
+            .OrderBy(n => n)
+            .ToList();
+    }
+
+    /// <summary>Data center name for a named world, or empty.</summary>
+    public static string DataCenterOfWorld(string worldName)
+    {
+        var worlds = Svc.Data.GetExcelSheet<World>();
+        if (worlds == null) return string.Empty;
+        foreach (var w in worlds)
+        {
+            if (!w.IsPublic) continue;
+            if (w.Name.ExtractText() != worldName) continue;
+            return w.DataCenter.ValueNullable?.Name.ExtractText() ?? string.Empty;
+        }
+        return string.Empty;
+    }
+
+    /// <summary>Every public world name mapped to its data center. One sheet pass.</summary>
+    public static Dictionary<string, string> WorldToDataCenter()
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var worlds = Svc.Data.GetExcelSheet<World>();
+        if (worlds == null) return map;
+        foreach (var w in worlds)
+        {
+            if (!w.IsPublic || w.DataCenter.RowId == 0) continue;
+            var name = w.Name.ExtractText();
+            var dc = w.DataCenter.ValueNullable?.Name.ExtractText() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(dc)) continue;
+            map[name] = dc;
+        }
+        return map;
     }
 }

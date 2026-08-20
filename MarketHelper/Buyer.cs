@@ -11,6 +11,7 @@ public sealed class BuyLine
     public uint ItemId;
     public string ItemName = string.Empty;
     public string World = string.Empty;
+    public string DataCenter = string.Empty;
     public long UnitPrice;
     public int Quantity;
     public bool Hq;
@@ -23,6 +24,7 @@ public sealed class BuyLine
 public sealed class WorldStop
 {
     public string World = string.Empty;
+    public string DataCenter = string.Empty;
     public readonly List<BuyLine> Lines = new();
 
     public long TotalCost => Lines.Sum(l => l.Total);
@@ -39,6 +41,7 @@ public sealed class ItemSummary
     public int FoundUnits;                 // units available at or under the cap
     public long CheapestPrice;             // cheapest unit price anywhere in scope (even over cap)
     public string CheapestWorld = string.Empty;
+    public string CheapestDataCenter = string.Empty;
     public long MaxPrice;
     public bool AnyListingsAtAll;
     public readonly Dictionary<string, (int Units, long Cheapest)> PerWorld = new();
@@ -65,9 +68,14 @@ public sealed class BuyPlanResult
 /// Backing state for the Buyer tab's SCAN step. Queries Universalis off the UI thread, applies
 /// each item's price cap, and groups the surviving listings into one stop per world.
 ///
-/// Nothing here touches the game — a scan is read-only and free. The plan it produces is a
-/// SNAPSHOT: Universalis data is cached and can be minutes old, so BuyRunner re-verifies every
-/// price against the live board before spending a single gil.
+/// MAIN-THREAD RULE — the reason this class looks the way it does.
+///
+/// Dalamud throws "Not on main thread!" the moment a background task touches client state
+/// (the local player, the object table, IPC). The HTTP work genuinely has to be off-thread, so
+/// everything game-side is captured into a <see cref="ScanContext"/> snapshot FIRST, on the
+/// framework thread, inside <see cref="Scan"/>. <see cref="ScanAsync"/> is then pure: HTTP plus
+/// arithmetic, reading only that snapshot. Nothing in the async body may call Svc, Player,
+/// WorldInfo, ItemSearch or any bridge — if you need a new game value, add it to the snapshot.
 /// </summary>
 public sealed class Buyer
 {
@@ -81,29 +89,117 @@ public sealed class Buyer
 
     public Buyer(Plugin plugin) => _plugin = plugin;
 
-    /// <summary>The scan scope: the player's DC unless overridden, or the whole region.</summary>
-    public string ResolveScope()
+    /// <summary>Everything the scan needs from the game, read once on the main thread.</summary>
+    private sealed class ScanContext
     {
-        if (!string.IsNullOrWhiteSpace(Cfg.BuyerScopeOverride)) return Cfg.BuyerScopeOverride.Trim();
-        if (Cfg.BuyerScanRegion)
-        {
-            var region = WorldInfo.CurrentRegion();
-            if (!string.IsNullOrWhiteSpace(region)) return region;
-        }
-        var dc = WorldInfo.CurrentDataCenter();
-        return string.IsNullOrWhiteSpace(dc) ? "Aether" : dc;
+        public List<string> Locations = new();   // Universalis query targets (world, DC or region)
+        public string CurrentWorld = string.Empty;
+        public string CurrentDataCenter = string.Empty;
+        public bool LifestreamPresent;
+        public HashSet<string> MyRetainers = new();
+        public HashSet<string> ExcludedWorlds = new();
+        public Dictionary<string, string> WorldToDc = new();
+        public Dictionary<uint, string> Names = new();
+        public int DelayMs;
+
+        public string ScopeLabel => Locations.Count == 0
+            ? "(nothing selected)"
+            : string.Join(", ", Locations);
     }
 
+    /// <summary>
+    /// What to ask Universalis for, straight from the scope selector. Universalis takes a world,
+    /// a data center or a region name at the same endpoint, so each mode is just a different
+    /// location string — mode 3 is the only one that yields more than one.
+    /// </summary>
+    public List<string> ResolveLocations()
+    {
+        switch (Math.Clamp(Cfg.BuyerScopeMode, 0, 3))
+        {
+            case 0:
+            {
+                var world = WorldInfo.CurrentWorld();
+                return string.IsNullOrWhiteSpace(world) ? new List<string>() : new List<string> { world };
+            }
+            case 1:
+            {
+                var dc = WorldInfo.CurrentDataCenter();
+                return string.IsNullOrWhiteSpace(dc) ? new List<string>() : new List<string> { dc };
+            }
+            case 2:
+            {
+                var region = WorldInfo.CurrentRegion();
+                return string.IsNullOrWhiteSpace(region) ? new List<string>() : new List<string> { region };
+            }
+            default:
+            {
+                var chosen = Cfg.BuyerDataCenters
+                    .Where(d => !string.IsNullOrWhiteSpace(d))
+                    .Select(d => d.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (chosen.Count > 0) return chosen;
+
+                var here = WorldInfo.CurrentDataCenter();
+                return string.IsNullOrWhiteSpace(here) ? new List<string>() : new List<string> { here };
+            }
+        }
+    }
+
+    /// <summary>
+    /// Start a scan. MUST be called from the framework/UI thread — it reads client state to build
+    /// the snapshot before handing off to the background task.
+    /// </summary>
     public void Scan()
     {
         if (Scanning) return;
         var items = Cfg.BuyerItems.Where(i => i.Enabled && i.ItemId != 0 && i.Quantity > 0).ToList();
         if (items.Count == 0) { Error = "Nothing on the shopping list."; Status = Error; return; }
 
+        ScanContext ctx;
+        try
+        {
+            // ---- main-thread snapshot: every game read happens here and nowhere else ----
+            ctx = new ScanContext
+            {
+                Locations = ResolveLocations(),
+                CurrentWorld = WorldInfo.CurrentWorld(),
+                CurrentDataCenter = WorldInfo.CurrentDataCenter(),
+                LifestreamPresent = LifestreamBridge.Available,
+                DelayMs = Math.Clamp(Cfg.BuyerScanDelayMs, 0, 2000),
+                WorldToDc = WorldInfo.WorldToDataCenter(),
+                MyRetainers = new HashSet<string>(
+                    Cfg.MyRetainers.Where(n => !string.IsNullOrWhiteSpace(n)).Select(Normalise)),
+                ExcludedWorlds = new HashSet<string>(
+                    Cfg.BuyerExcludedWorlds.Where(w => !string.IsNullOrWhiteSpace(w)).Select(w => w.Trim()),
+                    StringComparer.OrdinalIgnoreCase),
+            };
+            foreach (var item in items)
+            {
+                var name = ItemSearch.FindById(item.ItemId);
+                if (string.IsNullOrEmpty(name)) name = ItemSearch.FindByIdAny(item.ItemId);
+                if (string.IsNullOrEmpty(name)) name = $"Item #{item.ItemId}";
+                ctx.Names[item.ItemId] = name;
+            }
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+            Status = $"Scan failed while reading game data: {ex.Message}";
+            return;
+        }
+
+        if (ctx.Locations.Count == 0)
+        {
+            Error = "Nothing to scan — pick a scope (and in Custom mode, tick at least one data center).";
+            Status = Error;
+            return;
+        }
+
         Error = null;
         Scanning = true;
-        Status = "Scanning...";
-        _ = ScanAsync(items, ResolveScope());
+        Status = $"Scanning {ctx.ScopeLabel}...";
+        _ = ScanAsync(items, ctx);
     }
 
     public void ClearPlan()
@@ -113,23 +209,21 @@ public sealed class Buyer
         Error = null;
     }
 
-    private async Task ScanAsync(List<BuyerItem> items, string scope)
+    /// <summary>
+    /// Background half of the scan. Touches NOTHING game-side — only the snapshot, the config
+    /// values captured through Cfg (plain POCO reads), and Universalis over HTTP.
+    /// </summary>
+    private async Task ScanAsync(List<BuyerItem> items, ScanContext ctx)
     {
-        var result = new BuyPlanResult { Scope = scope };
+        var result = new BuyPlanResult { Scope = ctx.ScopeLabel };
         try
         {
-            // Own retainers are filtered out — you can't buy from yourself, and a listing of ours
-            // showing up as "the cheapest" would just wedge the run at that row.
-            var mine = new HashSet<string>(
-                Cfg.MyRetainers.Where(n => !string.IsNullOrWhiteSpace(n)).Select(Normalise));
-
+            var allowOvershoot = Cfg.BuyerAllowOvershoot;
             var byWorld = new Dictionary<string, WorldStop>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var item in items)
             {
-                var name = ItemSearch.FindById(item.ItemId);
-                if (string.IsNullOrEmpty(name)) name = ItemSearch.FindByIdAny(item.ItemId);
-                if (string.IsNullOrEmpty(name)) name = $"Item #{item.ItemId}";
+                var name = ctx.Names.TryGetValue(item.ItemId, out var n) ? n : $"Item #{item.ItemId}";
 
                 var summary = new ItemSummary
                 {
@@ -139,18 +233,46 @@ public sealed class Buyer
                     MaxPrice = item.MaxPrice,
                 };
 
-                var res = await Universalis.GetListingsAsync(scope, item.ItemId, 100, item.HqOnly);
-                if (res.Error != null)
+                // One query per location, fired in parallel — the same shape the Flipper tab has
+                // used reliably for cross-region lookups. Universalis has no "several DCs at once"
+                // endpoint, so in Custom mode the DC list you chose is exactly what gets queried:
+                // nothing wider, nothing you didn't tick.
+                var tasks = ctx.Locations
+                    .Select(loc => (Location: loc, Task: Universalis.GetListingsAsync(loc, item.ItemId, 100, item.HqOnly)))
+                    .ToList();
+                await Task.WhenAll(tasks.Select(t => t.Task));
+
+                var merged = new List<Universalis.Listing>();
+                var failures = new List<string>();
+                foreach (var (loc, task) in tasks)
                 {
-                    result.Warnings.Add($"{name}: lookup failed ({res.Error}) — skipped.");
+                    var res = task.Result;
+                    if (res.Error != null) { failures.Add($"{loc} ({res.Error})"); continue; }
+                    merged.AddRange(res.Listings);
+                }
+
+                if (failures.Count > 0)
+                    result.Warnings.Add($"{name}: lookup failed on {string.Join(", ", failures)}.");
+                if (merged.Count == 0 && failures.Count == ctx.Locations.Count)
+                {
                     result.Items.Add(summary);
                     continue;
                 }
 
-                var listings = res.Listings
+                // Pace between ITEMS rather than between locations, so a long shopping list can't
+                // machine-gun Universalis even though each item's locations go out together.
+                if (ctx.DelayMs > 0) await Task.Delay(ctx.DelayMs);
+
+                // Own retainers are filtered out — you can't buy from yourself, and one of ours
+                // showing up as "the cheapest" would just wedge the run on that row. Excluded
+                // worlds are dropped here too, so they never reach the plan or the route.
+                var seen = new HashSet<string>();
+                var listings = merged
+                    .Where(l => seen.Add($"{l.World}|{l.Retainer}|{l.PricePerUnit}|{l.Quantity}|{l.Hq}"))
                     .Where(l => l.PricePerUnit > 0 && l.Quantity > 0)
                     .Where(l => !item.HqOnly || l.Hq)
-                    .Where(l => !mine.Contains(Normalise(l.Retainer)))
+                    .Where(l => !ctx.MyRetainers.Contains(Normalise(l.Retainer)))
+                    .Where(l => !ctx.ExcludedWorlds.Contains(l.World))
                     .OrderBy(l => l.PricePerUnit)
                     .ToList();
 
@@ -159,6 +281,7 @@ public sealed class Buyer
                 {
                     summary.CheapestPrice = listings[0].PricePerUnit;
                     summary.CheapestWorld = listings[0].World;
+                    summary.CheapestDataCenter = DcOf(ctx, listings[0].World);
                 }
 
                 var remaining = item.Quantity;
@@ -168,12 +291,15 @@ public sealed class Buyer
                     if (l.PricePerUnit > item.MaxPrice) break;   // sorted, so everything after is dearer
 
                     // A market listing is bought whole — you cannot take part of a stack.
-                    if (l.Quantity > remaining && !Cfg.BuyerAllowOvershoot) continue;
+                    if (l.Quantity > remaining && !allowOvershoot) continue;
 
-                    var world = string.IsNullOrWhiteSpace(l.World) ? scope : l.World;
+                    var world = l.World;
+                    if (string.IsNullOrWhiteSpace(world)) continue;   // can't route to an unknown world
+                    var dcOfWorld = DcOf(ctx, world);
+
                     if (!byWorld.TryGetValue(world, out var stop))
                     {
-                        stop = new WorldStop { World = world };
+                        stop = new WorldStop { World = world, DataCenter = dcOfWorld };
                         byWorld[world] = stop;
                     }
                     stop.Lines.Add(new BuyLine
@@ -181,6 +307,7 @@ public sealed class Buyer
                         ItemId = item.ItemId,
                         ItemName = name,
                         World = world,
+                        DataCenter = dcOfWorld,
                         UnitPrice = l.PricePerUnit,
                         Quantity = l.Quantity,
                         Hq = l.Hq,
@@ -199,26 +326,44 @@ public sealed class Buyer
                 if (summary.NothingUnderCap)
                     result.Warnings.Add($"{name}: nothing at or under {item.MaxPrice:N0}g (cheapest is {summary.CheapestPrice:N0}g on {summary.CheapestWorld}).");
                 else if (!summary.AnyListingsAtAll)
-                    result.Warnings.Add($"{name}: no listings anywhere on {scope}.");
+                    result.Warnings.Add($"{name}: no listings on {ctx.ScopeLabel}.");
                 else if (!summary.Satisfied)
                     result.Warnings.Add($"{name}: only {summary.FoundUnits} of {summary.Requested} available under cap.");
 
                 result.Items.Add(summary);
             }
 
-            // Visit order: whatever world we're already standing on first (free), then the most
-            // valuable stops, so an interrupted run has still banked the biggest wins.
-            var here = WorldInfo.CurrentWorld();
+            // Visit order, cheapest-travel first:
+            //   1. the world we're already standing on (free),
+            //   2. the rest of our current DC (a plain world visit),
+            //   3. other DCs, each visited contiguously so we pay ONE data-center transfer per DC,
+            //      richest DC first, and richest world first inside each.
+            var dcValue = byWorld.Values
+                .GroupBy(w => w.DataCenter, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Sum(w => w.TotalCost), StringComparer.OrdinalIgnoreCase);
+
             foreach (var stop in byWorld.Values
-                         .OrderByDescending(s => string.Equals(s.World, here, StringComparison.OrdinalIgnoreCase))
-                         .ThenByDescending(s => s.TotalCost))
+                         .OrderByDescending(w => string.Equals(w.World, ctx.CurrentWorld, StringComparison.OrdinalIgnoreCase))
+                         .ThenByDescending(w => string.Equals(w.DataCenter, ctx.CurrentDataCenter, StringComparison.OrdinalIgnoreCase))
+                         .ThenByDescending(w => dcValue.TryGetValue(w.DataCenter, out var v) ? v : 0)
+                         .ThenBy(w => w.DataCenter, StringComparer.OrdinalIgnoreCase)
+                         .ThenByDescending(w => w.TotalCost))
             {
                 stop.Lines.Sort((a, b) => a.UnitPrice.CompareTo(b.UnitPrice));
                 result.Stops.Add(stop);
             }
 
-            if (result.Stops.Count > 1 && !LifestreamBridge.Available)
+            if (result.Stops.Count > 1 && !ctx.LifestreamPresent)
                 result.Warnings.Add("Lifestream isn't loaded — world hops will be skipped; only the world you're on can be bought from.");
+
+            var foreignDcs = result.Stops
+                .Select(s2 => s2.DataCenter)
+                .Where(d => !string.IsNullOrWhiteSpace(d)
+                            && !string.Equals(d, ctx.CurrentDataCenter, StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (foreignDcs.Count > 0)
+                result.Warnings.Add($"Route crosses {foreignDcs.Count} other data center(s): {string.Join(", ", foreignDcs)}. Data-center travel queues can be slow, and you must not be in a party.");
 
             Plan = result;
             Status = result.HasWork
@@ -236,6 +381,9 @@ public sealed class Buyer
         }
     }
 
-    private static string Normalise(string s) =>
-        new(( s ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+    private static string DcOf(ScanContext ctx, string world)
+        => !string.IsNullOrWhiteSpace(world) && ctx.WorldToDc.TryGetValue(world, out var dc) ? dc : string.Empty;
+
+    private static string Normalise(string s)
+        => new((s ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 }

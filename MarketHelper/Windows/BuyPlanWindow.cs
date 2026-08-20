@@ -46,11 +46,20 @@ public sealed class BuyPlanWindow : Window
         var plan = buyer.Plan;
         if (plan == null)
         {
+            if (!string.IsNullOrEmpty(buyer.Error))
+            {
+                ImGui.TextColored(Red, "Scan failed.");
+                Dummy(2f);
+                WrapText(Red, buyer.Error!);
+                Dummy(6f);
+                if (ImGui.Button("Try again", new Vector2(SW(110), 0))) buyer.Scan();
+                return;
+            }
             ImGui.TextColored(Grey, "No scan yet. Press SCAN on the Buyer tab.");
             return;
         }
 
-        ImGui.TextColored(Grey, $"Scope: {plan.Scope}   •   scanned {plan.ScannedAt:HH:mm:ss}");
+        WrapText(Grey, $"Scanned {plan.Scope} at {plan.ScannedAt:HH:mm:ss}");
         if (plan.HasWork)
             ImGui.TextColored(Green, $"{plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s) — about {plan.GrandTotal:N0}g.");
         else
@@ -132,7 +141,8 @@ public sealed class BuyPlanWindow : Window
                 ImGui.TextColored(Red, "no listings");
             else
                 ImGui.TextColored(it.CheapestPrice <= it.MaxPrice ? Green : Red,
-                    $"{it.CheapestPrice:N0}g on {it.CheapestWorld}");
+                    $"{it.CheapestPrice:N0}g on {it.CheapestWorld}"
+                    + (string.IsNullOrWhiteSpace(it.CheapestDataCenter) ? "" : $" [{it.CheapestDataCenter}]"));
         }
         ImGui.EndTable();
 
@@ -157,7 +167,8 @@ public sealed class BuyPlanWindow : Window
 
         foreach (var stop in plan.Stops)
         {
-            if (!ImGui.CollapsingHeader($"{stop.World} — {stop.TotalUnits} unit(s), {stop.TotalCost:N0}g##stop{stop.World}",
+            var dcTag = string.IsNullOrWhiteSpace(stop.DataCenter) ? "" : $" [{stop.DataCenter}]";
+            if (!ImGui.CollapsingHeader($"{stop.World}{dcTag} — {stop.TotalUnits} unit(s), {stop.TotalCost:N0}g##stop{stop.World}",
                     ImGuiTreeNodeFlags.DefaultOpen))
                 continue;
 

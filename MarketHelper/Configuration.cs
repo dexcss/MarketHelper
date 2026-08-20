@@ -142,9 +142,24 @@ public class Configuration : IPluginConfiguration
     // on any new setup should prove the route and the prices without touching the wallet.
     public bool BuyerDryRun { get; set; } = true;
 
-    // Scan scope. Default is your own data center; region widens it (slower, more travel).
-    public bool BuyerScanRegion { get; set; } = false;
-    public string BuyerScopeOverride { get; set; } = "";     // exact DC/region name, blank = auto
+    // Scan scope. Mirrors the Lister's selector so both tabs read the same way:
+    //   0 = my world, 1 = my data center, 2 = my whole region, 3 = custom DC picker.
+    // Custom is the default because it's the only mode that lets you pick several DCs by hand.
+    public int BuyerScopeMode { get; set; } = 3;
+
+    // Which data centers get scanned in Custom mode. Empty falls back to the DC you're on.
+    // Any DC in your own region is fair game since you can travel freely within it.
+    public List<string> BuyerDataCenters { get; set; } = new();
+
+    // Worlds to never scan, travel to, or buy from, even when their DC is selected.
+    public List<string> BuyerExcludedWorlds { get; set; } = new();
+
+    // Show data centers outside your region in the picker. Off by default because you can't
+    // travel to them — useful only for looking at prices.
+    public bool BuyerShowAllRegions { get; set; } = false;
+
+    // Politeness gap between Universalis calls when scanning several DCs at once.
+    public int BuyerScanDelayMs { get; set; } = 120;
 
     // A market listing must be bought whole. When on, a stack larger than what you still need is
     // still bought; when off, oversized stacks are skipped.
