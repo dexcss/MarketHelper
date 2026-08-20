@@ -597,17 +597,24 @@ public partial class MainWindow
         HelpMarker("How deep to read each data center's listings. Furnishing markets run to hundreds of rows, so raise this if \"Found\" comes back short for something you can see plenty of on Universalis.");
 
         var topUp = Cfg.BuyerTopUpShortfalls;
-        if (ImGui.Checkbox("Make up shortfalls at later stops", ref topUp)) { Cfg.BuyerTopUpShortfalls = topUp; Cfg.Save(); }
+        if (ImGui.Checkbox("Keep going if the route finishes short", ref topUp)) { Cfg.BuyerTopUpShortfalls = topUp; Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
-        HelpMarker("If an early world had fewer listings than the scan promised, later worlds buy the difference instead of sticking to their own share. Also lets a world be tried for an item the plan gave it none of, as long as the scan saw stock there.");
+        HelpMarker("When the planned stops are done and something is still short, the run extends itself down the price list — the next cheapest listings the scan found — and adds more stops. Always at the end, never mid-route: chasing a shortfall early means paying the current world's expensive tail while cheaper listings wait further along.");
+
+        using (ImRaiiDisabled(!Cfg.BuyerTopUpShortfalls))
+        {
+            var passes = Cfg.BuyerMaxTopUpPasses;
+            ImGui.SetNextItemWidth(SW(180));
+            if (ImGui.InputInt("Max top-up passes", ref passes, 1)) { Cfg.BuyerMaxTopUpPasses = Math.Clamp(passes, 1, 10); Cfg.Save(); }
+        }
 
         using (ImRaiiDisabled(!Cfg.BuyerTopUpShortfalls))
         {
             var overPlan = Cfg.BuyerTopUpMaxOverPlanPercent;
             ImGui.SetNextItemWidth(SW(180));
-            if (ImGui.InputInt("Uncapped top-up limit (% over plan)", ref overPlan, 5)) { Cfg.BuyerTopUpMaxOverPlanPercent = Math.Clamp(overPlan, 0, 500); Cfg.Save(); }
+            if (ImGui.InputInt("Uncapped price rail (% over plan)", ref overPlan, 5)) { Cfg.BuyerTopUpMaxOverPlanPercent = Math.Clamp(overPlan, 0, 500); Cfg.Save(); }
             ImGui.SameLine(0, SW(6));
-            HelpMarker("For items with NO price cap: topping up means buying listings the plan never priced in, so it won't pay more than the dearest price the plan had for that item plus this percentage. 0 removes the limit. Items with their own cap ignore this.");
+            HelpMarker("For items with NO price cap: the dearest price the plan budgeted is the most you were ever willing to pay, so it won't go past that plus this percentage. Keeps a run from taking a 1.8M listing while a 975k one waits two stops away. 0 removes the rail; items with their own cap ignore it.");
         }
 
         var audit = Cfg.BuyerWriteAuditLog;

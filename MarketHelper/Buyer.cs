@@ -66,6 +66,14 @@ public sealed class ItemSummary
     public readonly Dictionary<string, int> AvailableByWorld = new();
 
     /// <summary>
+    /// Listings the scan found but the plan did NOT allocate — everything past the cut, still in
+    /// price order. If the planned listings come up short on the road, the run extends itself from
+    /// the front of this list: the 23rd, 24th cheapest and so on. Consumed entries are removed as
+    /// they're used, so a second pass carries on where the first stopped.
+    /// </summary>
+    public readonly List<BuyLine> Spare = new();
+
+    /// <summary>
     /// The N cheapest listings in scope, INCLUDING ones above your cap. This is what tells you
     /// "nothing at 1,000g, but here's what it actually costs" instead of just reporting nothing.
     /// </summary>
@@ -391,6 +399,38 @@ public sealed class Buyer
                         summary.PerWorld[world] = (pw.Units + l.Quantity, Math.Min(pw.Cheapest, l.PricePerUnit));
 
                     remaining -= l.Quantity;
+                }
+
+                // Everything the plan didn't take, cheapest first, kept for a top-up pass.
+                var allocatedKeys = new HashSet<string>(
+                    result.Stops.SelectMany(st => st.Lines)
+                        .Where(bl => bl.ItemId == item.ItemId)
+                        .Select(bl => $"{bl.World}|{bl.Seller}|{bl.UnitPrice}|{bl.Quantity}"));
+                var takenHere = new HashSet<string>();
+                foreach (var line in byWorld.Values.SelectMany(st => st.Lines).Where(bl => bl.ItemId == item.ItemId))
+                    takenHere.Add($"{line.World}|{line.Seller}|{line.UnitPrice}|{line.Quantity}");
+
+                var spareBudget = 300;
+                foreach (var l in listings)
+                {
+                    if (spareBudget <= 0) break;
+                    if (l.PricePerUnit > cap) break;                 // sorted — the rest are dearer
+                    var key = $"{l.World}|{l.Retainer}|{l.PricePerUnit}|{l.Quantity}";
+                    if (takenHere.Remove(key) || allocatedKeys.Remove(key)) continue;   // already planned
+                    if (string.IsNullOrWhiteSpace(l.World)) continue;
+
+                    summary.Spare.Add(new BuyLine
+                    {
+                        ItemId = item.ItemId,
+                        ItemName = name,
+                        World = l.World,
+                        DataCenter = DcOf(ctx, l.World),
+                        UnitPrice = l.PricePerUnit,
+                        Quantity = l.Quantity,
+                        Hq = l.Hq,
+                        Seller = l.Retainer,
+                    });
+                    spareBudget--;
                 }
 
                 if (summary.NothingUnderCap)

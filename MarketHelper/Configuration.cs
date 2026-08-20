@@ -193,14 +193,18 @@ public class Configuration : IPluginConfiguration
     public bool BuyerDcPriorityEnabled { get; set; } = false;
     public List<string> BuyerDcPriority { get; set; } = new();
 
-    // Carry a shortfall forward. If an early world had fewer listings than the scan promised, later
-    // stops buy the difference instead of sticking to their own allocation.
+    // When the planned route finishes short, extend it: take the next cheapest listings the scan
+    // found and add more stops. Happens at the END of the run, never mid-route.
     public bool BuyerTopUpShortfalls { get; set; } = true;
 
-    // Safety rail for topping up an UNCAPPED item: never pay more than the dearest price the plan
-    // had for it, plus this percentage. 0 disables the rail. Only applies when the item has no
-    // price cap of its own — with a cap, the cap governs.
-    public int BuyerTopUpMaxOverPlanPercent { get; set; } = 50;
+    // How many extension passes a single run may make before giving up.
+    public int BuyerMaxTopUpPasses { get; set; } = 3;
+
+    // Price rail for an UNCAPPED item: never pay more than the dearest unit price the plan
+    // budgeted for it, plus this percentage. That planned maximum is the most we were ever willing
+    // to pay; anything beyond it belongs to a re-scan, not to this run. 0 disables the rail.
+    // Items with their own price cap ignore this — the cap governs.
+    public int BuyerTopUpMaxOverPlanPercent { get; set; } = 10;
 
     // Write a CSV audit trail of every run to the plugin config folder (buyer-logs), so a run can
     // be checked over afterwards instead of scrolled back through in chat.

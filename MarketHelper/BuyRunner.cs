@@ -67,6 +67,10 @@ public sealed class BuyRunner
     private bool _capped;
     private string _capReason = string.Empty;
     private int _orderTotal;
+    private int _stopTarget;
+    private int _extensionPasses;
+    private readonly Dictionary<uint, long> _plannedMax = new();
+    private int _boughtBeforeStop;
     private int _wantUnits;
     private bool _hqOnly;
 
@@ -105,6 +109,14 @@ public sealed class BuyRunner
         ResetRunState();
         Report.Clear();
         _gilAtStart = MarketBoard.Gil();
+
+        // Snapshot now: extension stops append lines, and the rail must stay anchored to what the
+        // ORIGINAL plan was willing to pay, not to whatever a top-up pass has since added.
+        _plannedMax.Clear();
+        foreach (var stop in plan.Stops)
+            foreach (var line in stop.Lines)
+                if (!_plannedMax.TryGetValue(line.ItemId, out var cur) || line.UnitPrice > cur)
+                    _plannedMax[line.ItemId] = line.UnitPrice;
         _homeWorld = string.IsNullOrWhiteSpace(Cfg.BuyerHomeWorld) ? WorldInfo.CurrentWorld() : Cfg.BuyerHomeWorld.Trim();
 
         Log(DryRun
@@ -135,6 +147,9 @@ public sealed class BuyRunner
         _capped = true;
         _capReason = string.Empty;
         _orderTotal = 0;
+        _stopTarget = 0;
+        _boughtBeforeStop = 0;
+        _extensionPasses = 0;
         _wantUnits = 0;
         _hqOnly = false;
 
@@ -423,19 +438,22 @@ public sealed class BuyRunner
                 var cfgRow = Cfg.BuyerItems.FirstOrDefault(i => i.ItemId == _item);
                 if (cfgRow != null) _hqOnly = cfgRow.HqOnly;
 
-                // The target is the WHOLE order minus whatever the run has already bought — not
-                // this stop's allocation. The plan splits an order across the cheapest listings it
-                // found, so when an early world turns out to have fewer than promised, the
-                // shortfall has to be picked up here rather than quietly lost.
+                // EXACTLY this stop's allocation. Nothing more.
+                //
+                // The plan spreads an order across the globally cheapest listings, so a stop that
+                // buys beyond its share is buying that world's expensive tail while cheaper
+                // listings wait further along the route. Shortfalls are not chased here — they're
+                // collected at the END of the run and bought from the next cheapest listings the
+                // scan found, which is what TryExtendPlan does.
                 var allocated = lines.Sum(l => l.Quantity);
-                _orderTotal = Cfg.BuyerTopUpShortfalls
-                    ? (cfgRow?.Quantity ?? allocated)
-                    : UnitsBoughtFor(_item) + allocated;
+                _orderTotal = cfgRow?.Quantity ?? _plan?.Items.FirstOrDefault(i => i.ItemId == _item)?.Requested ?? allocated;
+                _boughtBeforeStop = UnitsBoughtFor(_item);
+                _stopTarget = Math.Min(allocated, Math.Max(0, _orderTotal - _boughtBeforeStop));
+                _wantUnits = _stopTarget;
 
-                _wantUnits = Math.Max(0, _orderTotal - UnitsBoughtFor(_item));
                 if (_wantUnits <= 0)
                 {
-                    Log($"{_itemName}: already have all {_orderTotal} — skipping here.");
+                    Log($"{_itemName}: nothing to buy here ({_boughtBeforeStop}/{_orderTotal} already).");
                     State = BuyState.NextItem;
                     return;
                 }
@@ -446,30 +464,29 @@ public sealed class BuyRunner
                 _cap = cfgRow?.EffectiveCap ?? (lines.Count > 0 ? lines.Max(l => l.UnitPrice) : long.MaxValue);
                 _capReason = _capped ? "your cap" : string.Empty;
 
-                // Safety rail on an uncapped top-up: buying beyond the plan's allocation means
-                // buying listings the plan didn't price in, so refuse to go far past the dearest
-                // price it did plan for. Without this, "buy 50, no cap" can quietly spend many
-                // times the total the plan showed you.
+                // Price rail for an UNCAPPED item. The plan's dearest allocated unit price is the
+                // most we were ever willing to pay for this item; a small tolerance over it covers
+                // listings that shifted since the scan. Anything beyond that belongs to a re-scan,
+                // not to this run — without this rail an uncapped item will happily take a
+                // 1.8M listing while a 975k one waits two stops away.
                 if (!_capped && Cfg.BuyerTopUpMaxOverPlanPercent > 0)
                 {
-                    var plannedMax = PlannedMaxUnitPrice(_item);
+                    var plannedMax = _plannedMax.TryGetValue(_item, out var pmv) ? pmv : PlannedMaxUnitPrice(_item);
                     if (plannedMax > 0)
                     {
                         _cap = (long)(plannedMax * (1.0 + Cfg.BuyerTopUpMaxOverPlanPercent / 100.0));
-                        _capReason = $"plan +{Cfg.BuyerTopUpMaxOverPlanPercent}%";
+                        _capReason = $"plan max {plannedMax:N0}g +{Cfg.BuyerTopUpMaxOverPlanPercent}%";
                     }
                 }
 
                 _buysThisItem = 0;
                 _lastListingCount = 0;
-                var shortfall = allocated > 0 && _wantUnits > allocated;
                 Log(_cap == long.MaxValue
-                    ? $"{_itemName}: want {_wantUnits} more unit(s) (no price cap)."
-                    : $"{_itemName}: want {_wantUnits} more unit(s) at or under {_cap:N0}g each ({_capReason})."
-                      + (shortfall ? $" Topping up — this stop was only allocated {allocated}." : ""));
+                    ? $"{_itemName}: buying this stop's {_wantUnits} (no price cap)."
+                    : $"{_itemName}: buying this stop's {_wantUnits}, at or under {_cap:N0}g each ({_capReason}).");
                 Note(AuditKind.Item,
                     (_cap == long.MaxValue ? "no price cap" : $"ceiling {_cap:N0}g ({_capReason})")
-                    + (shortfall ? $"; topping up shortfall, allocated {allocated}" : ""),
+                    + $"; allocation {allocated}, order {_boughtBeforeStop}/{_orderTotal}",
                     _itemName, _wantUnits);
                 State = BuyState.Search;
                 return;
@@ -658,12 +675,13 @@ public sealed class BuyRunner
                 if (_buysThisItem >= 40) { Log($"{_itemName}: purchase cap for one item reached — moving on."); State = BuyState.NextItem; return; }
 
                 var boughtSoFar = UnitsBoughtFor(_item);
-                var remaining = _orderTotal - boughtSoFar;
+                var boughtHere = boughtSoFar - _boughtBeforeStop;
+                var remaining = _stopTarget - boughtHere;
                 if (remaining <= 0)
                 {
                     Log(DryRun
-                        ? $"{_itemName}: dry run complete ({boughtSoFar} of {_orderTotal} accounted for)."
-                        : $"{_itemName}: order complete ({boughtSoFar} of {_orderTotal}).");
+                        ? $"{_itemName}: dry run — took {boughtHere} here, {boughtSoFar} of {_orderTotal} overall."
+                        : $"{_itemName}: took {boughtHere} here, {boughtSoFar} of {_orderTotal} overall.");
                     State = BuyState.NextItem;
                     return;
                 }
@@ -924,28 +942,97 @@ public sealed class BuyRunner
     {
         if (_stop == null) { _itemQueue = new List<uint>(); _itemIdx = -1; return; }
 
-        var queue = _stop.Lines.Select(l => l.ItemId).Distinct().ToList();
-
-        if (Cfg.BuyerTopUpShortfalls && _plan != null)
-        {
-            foreach (var summary in _plan.Items)
-            {
-                if (queue.Contains(summary.ItemId)) continue;
-
-                var target = Cfg.BuyerItems.FirstOrDefault(i => i.ItemId == summary.ItemId)?.Quantity
-                             ?? summary.Requested;
-                if (UnitsBoughtFor(summary.ItemId) >= target) continue;
-                if (!summary.AvailableByWorld.ContainsKey(_stop.World)) continue;
-
-                queue.Add(summary.ItemId);
-            }
-        }
-
-        _itemQueue = queue;
+        // Only what this stop was allocated. Extension stops carry their own lines, so a top-up
+        // pass arrives here as ordinary allocated work.
+        _itemQueue = _stop.Lines.Select(l => l.ItemId).Distinct().ToList();
         _itemIdx = -1;
     }
 
-    /// <summary>Dearest unit price the plan actually budgeted for this item, across all stops.</summary>
+    /// <summary>
+    /// End-of-run top-up. Called once the planned route is finished: for anything still short of
+    /// its order, take the NEXT cheapest listings the scan found (the ones the plan didn't
+    /// allocate — the 23rd, 24th and so on), build fresh stops from them, and append those to the
+    /// route so the run simply continues.
+    ///
+    /// Deliberately at the END, never mid-route. Chasing a shortfall early means paying the
+    /// current world's expensive tail while cheaper listings sit unbought two stops away; by the
+    /// time the plan is done, every cheap listing it knew about has already been tried.
+    ///
+    /// Returns true when new stops were appended, in which case the run carries on.
+    /// </summary>
+    private bool TryExtendPlan()
+    {
+        if (_plan == null || !Cfg.BuyerTopUpShortfalls) return false;
+        if (_extensionPasses >= Math.Max(1, Cfg.BuyerMaxTopUpPasses)) return false;
+
+        var newStops = new Dictionary<string, WorldStop>(StringComparer.OrdinalIgnoreCase);
+        var tooDear = 0;
+
+        foreach (var summary in _plan.Items)
+        {
+            var cfgRow = Cfg.BuyerItems.FirstOrDefault(i => i.ItemId == summary.ItemId);
+            var target = cfgRow?.Quantity ?? summary.Requested;
+            var need = target - UnitsBoughtFor(summary.ItemId);
+            if (need <= 0 || summary.Spare.Count == 0) continue;
+
+            // Price ceiling for the extension. With a cap of your own, that governs. Without one,
+            // the dearest price the ORIGINAL plan budgeted is the most you were ever willing to
+            // pay — going far past it is a decision for a re-scan, not something to do silently.
+            var ceiling = long.MaxValue;
+            if (cfgRow?.UseMaxPrice == true) ceiling = cfgRow.MaxPrice;
+            else if (Cfg.BuyerTopUpMaxOverPlanPercent > 0 && _plannedMax.TryGetValue(summary.ItemId, out var pm) && pm > 0)
+                ceiling = (long)(pm * (1.0 + Cfg.BuyerTopUpMaxOverPlanPercent / 100.0));
+
+            while (need > 0 && summary.Spare.Count > 0)
+            {
+                var next = summary.Spare[0];
+                if (next.UnitPrice > ceiling) { tooDear++; break; }        // sorted — rest are dearer
+                if (next.Quantity > need && !Cfg.BuyerAllowOvershoot) break;
+
+                summary.Spare.RemoveAt(0);                                  // consumed, never reused
+
+                if (!newStops.TryGetValue(next.World, out var stop))
+                {
+                    stop = new WorldStop { World = next.World, DataCenter = next.DataCenter };
+                    newStops[next.World] = stop;
+                }
+                stop.Lines.Add(next);
+                need -= next.Quantity;
+            }
+        }
+
+        if (newStops.Count == 0)
+        {
+            if (tooDear > 0)
+                Log($"Top-up skipped: the remaining listings are above the price rail (plan +{Cfg.BuyerTopUpMaxOverPlanPercent}%). Re-scan if you want them at current prices.");
+            return false;
+        }
+
+        var here = WorldInfo.CurrentWorld();
+        var hereDc = WorldInfo.CurrentDataCenter();
+        var ordered = newStops.Values
+            .OrderByDescending(w => string.Equals(w.World, here, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(w => string.Equals(w.DataCenter, hereDc, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(w => w.DataCenter, StringComparer.OrdinalIgnoreCase)
+            .ThenByDescending(w => w.TotalCost)
+            .ToList();
+
+        foreach (var stop in ordered)
+        {
+            stop.Lines.Sort((a, b) => a.UnitPrice.CompareTo(b.UnitPrice));
+            _plan.Stops.Add(stop);
+        }
+
+        _extensionPasses++;
+        var units = ordered.Sum(st => st.TotalUnits);
+        var cost = ordered.Sum(st => st.TotalCost);
+        Log($"Still short — top-up pass {_extensionPasses}: {units} more unit(s) from the next cheapest listings across {ordered.Count} world(s), about {cost:N0}g.");
+        Note(AuditKind.Item, $"top-up pass {_extensionPasses}: {units} unit(s) across {ordered.Count} world(s)",
+            qty: units, expected: cost);
+        return true;
+    }
+
+    /// <summary>Dearest unit price the plan actually budgeted for this item, across all stops.</summary>    /// <summary>Dearest unit price the plan actually budgeted for this item, across all stops.</summary>
     private long PlannedMaxUnitPrice(uint itemId)
     {
         if (_plan == null) return 0;
@@ -1048,6 +1135,13 @@ public sealed class BuyRunner
 
     private void Finish()
     {
+        // Planned route done — if anything is still short, extend and keep going.
+        if (TryExtendPlan())
+        {
+            State = BuyState.NextStop;
+            return;
+        }
+
         UpdateListAfterRun();
         var finalSpend = DryRun ? _spent : Math.Max(0, _gilAtStart - MarketBoard.Gil());
         Note(AuditKind.Finish,
