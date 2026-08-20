@@ -120,10 +120,15 @@ public sealed class BuyRunner
         _homeWorld = string.IsNullOrWhiteSpace(Cfg.BuyerHomeWorld) ? WorldInfo.CurrentWorld() : Cfg.BuyerHomeWorld.Trim();
 
         var already = DryRun ? 0 : plan.Bought.Values.Sum();
+        var stillNeeded = DryRun
+            ? plan.GrandUnits
+            : plan.Items.Sum(i => Math.Max(0, i.Requested - plan.BoughtFor(i.ItemId)));
+
         Log(DryRun
             ? $"DRY RUN — no gil will be spent. {plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s)."
-            : $"Buying {plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s) for about {plan.GrandTotal:N0}g."
-              + (already > 0 ? $" Carrying on from an earlier run — {already} unit(s) already bought against this plan." : ""));
+            : already > 0
+                ? $"Carrying on: {stillNeeded} unit(s) still to buy of {plan.GrandUnits} planned ({already} already bought against this plan)."
+                : $"Buying {plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s) for about {plan.GrandTotal:N0}g.");
         Note(AuditKind.RunStart,
             $"{(DryRun ? "Dry run" : "Live run")} — {plan.Stops.Count} stop(s), {plan.GrandUnits} unit(s), planned {plan.GrandTotal:N0}g, starting gil {_gilAtStart:N0}",
             expected: plan.GrandTotal);
@@ -225,6 +230,17 @@ public sealed class BuyRunner
         State = BuyState.FindBoard;
     }
 
+    /// <summary>
+    /// Pause on request. Unlike Stop this keeps the route position and the bought counts, so
+    /// Resume carries straight on — the difference matters, because Stop banks progress into the
+    /// shopping list and ends the run, while Pause simply holds it.
+    /// </summary>
+    public void PauseByUser()
+    {
+        if (!Running || IsPaused) return;
+        PauseRun("paused by you — press Resume when you're ready.");
+    }
+
     /// <summary>Free bag slots right now — shown next to the Resume button while paused.</summary>
     public int FreeSlotsNow() => RetainerReader.FreePlayerBagSlots();
 
@@ -268,9 +284,29 @@ public sealed class BuyRunner
                     return;
                 }
                 _stop = _plan.Stops[_stopIdx];
+
+                // Everything this stop was allocated has already been taken on an earlier SEND —
+                // no reason to travel here at all.
+                var stopLeft = _stop.TotalUnits;
+                if (!DryRun)
+                {
+                    stopLeft = 0;
+                    foreach (var group in _stop.Lines.GroupBy(l => l.ItemId))
+                        stopLeft += Math.Max(0, group.Sum(l => l.Quantity) - _plan.BoughtAtStop(_stopIdx, group.Key));
+                }
+                if (stopLeft <= 0)
+                {
+                    Log($"Stop {_stopIdx + 1}/{_plan.Stops.Count}: {_stop.World} — already done, skipping.");
+                    State = BuyState.NextStop;
+                    return;
+                }
+
                 var here = WorldInfo.CurrentWorld();
                 var hereDc = WorldInfo.CurrentDataCenter();
-                Log($"Stop {_stopIdx + 1}/{_plan.Stops.Count}: {_stop.World}{(string.IsNullOrWhiteSpace(_stop.DataCenter) ? "" : $" [{_stop.DataCenter}]")} — {_stop.TotalUnits} unit(s), about {_stop.TotalCost:N0}g.");
+                var stopTag = string.IsNullOrWhiteSpace(_stop.DataCenter) ? "" : $" [{_stop.DataCenter}]";
+                Log(stopLeft == _stop.TotalUnits
+                    ? $"Stop {_stopIdx + 1}/{_plan.Stops.Count}: {_stop.World}{stopTag} — {_stop.TotalUnits} unit(s), about {_stop.TotalCost:N0}g."
+                    : $"Stop {_stopIdx + 1}/{_plan.Stops.Count}: {_stop.World}{stopTag} — {stopLeft} of {_stop.TotalUnits} unit(s) still to take.");
 
                 if (string.Equals(here, _stop.World, StringComparison.OrdinalIgnoreCase))
                 {
@@ -457,14 +493,24 @@ public sealed class BuyRunner
                 // collected at the END of the run and bought from the next cheapest listings the
                 // scan found, which is what TryExtendPlan does.
                 var allocated = lines.Sum(l => l.Quantity);
-                _orderTotal = cfgRow?.Quantity ?? _plan?.Items.FirstOrDefault(i => i.ItemId == _item)?.Requested ?? allocated;
+                // The order size comes from the PLAN's snapshot, never from the live config row.
+                // The row gets deducted after a run ("5 wanted" becomes "3 left"), so reading it
+                // here would subtract the same purchases twice — the plan says 5 wanted and 2
+                // bought, and that arithmetic has to stay internally consistent.
+                _orderTotal = _plan?.Items.FirstOrDefault(i => i.ItemId == _item)?.Requested
+                              ?? cfgRow?.Quantity ?? allocated;
                 _boughtBeforeStop = UnitsBoughtFor(_item);
-                _stopTarget = Math.Min(allocated, Math.Max(0, _orderTotal - _boughtBeforeStop));
+
+                // What this stop still owes: its allocation minus what it already delivered on an
+                // earlier SEND, and never more than the order has left.
+                var doneHere = _plan?.BoughtAtStop(_stopIdx, _item) ?? 0;
+                _stopTarget = Math.Max(0, allocated - doneHere);
+                _stopTarget = Math.Min(_stopTarget, Math.Max(0, _orderTotal - _boughtBeforeStop));
                 _wantUnits = _stopTarget;
 
                 if (_wantUnits <= 0)
                 {
-                    Log($"{_itemName}: nothing to buy here ({_boughtBeforeStop}/{_orderTotal} already).");
+                    Log($"{_itemName}: nothing left to buy here ({_boughtBeforeStop}/{_orderTotal} bought, {doneHere}/{allocated} from this stop).");
                     State = BuyState.NextItem;
                     return;
                 }
@@ -492,9 +538,10 @@ public sealed class BuyRunner
 
                 _buysThisItem = 0;
                 _lastListingCount = 0;
+                var resumed = doneHere > 0 ? $" ({doneHere} of {allocated} already taken here)" : "";
                 Log(_cap == long.MaxValue
-                    ? $"{_itemName}: buying this stop's {_wantUnits} (no price cap)."
-                    : $"{_itemName}: buying this stop's {_wantUnits}, at or under {_cap:N0}g each ({_capReason}).");
+                    ? $"{_itemName}: buying this stop's {_wantUnits}{resumed} (no price cap)."
+                    : $"{_itemName}: buying this stop's {_wantUnits}{resumed}, at or under {_cap:N0}g each ({_capReason}).");
                 Note(AuditKind.Item,
                     (_cap == long.MaxValue ? "no price cap" : $"ceiling {_cap:N0}g ({_capReason})")
                     + $"; allocation {allocated}, order {_boughtBeforeStop}/{_orderTotal}",
@@ -933,7 +980,13 @@ public sealed class BuyRunner
     private Dictionary<uint, int> Tally => DryRun || _plan == null ? _dryBought : _plan.Bought;
 
     private void RecordBought(uint itemId, int qty)
-        => Tally[itemId] = (Tally.TryGetValue(itemId, out var n) ? n : 0) + qty;
+    {
+        Tally[itemId] = (Tally.TryGetValue(itemId, out var n) ? n : 0) + qty;
+        if (DryRun || _plan == null) return;
+
+        var key = BuyPlanResult.StopKey(_stopIdx, itemId);
+        _plan.StopProgress[key] = (_plan.StopProgress.TryGetValue(key, out var m) ? m : 0) + qty;
+    }
 
     /// <summary>Units bought (or, in a dry run, accounted for) this run — for the plan's Bought column.</summary>
     public int BoughtFor(uint itemId) => Tally.TryGetValue(itemId, out var n) ? n : 0;
@@ -1114,26 +1167,34 @@ public sealed class BuyRunner
 
         var finished = new List<string>();
         var reduced = new List<string>();
-        var banked = new List<uint>();
+
 
         foreach (var row in Cfg.BuyerItems)
         {
             if (!row.Enabled || row.ItemId == 0) continue;
+
+            // Only the units bought SINCE the last write-back. Bought is cumulative across the
+            // whole plan, while the row has already been reduced by every previous run — using
+            // the cumulative figure here deducts the same purchases again and would untick an
+            // order with units still outstanding.
             var got = BoughtFor(row.ItemId);
-            if (got <= 0) continue;
+            var alreadyBanked = _plan?.BankedFor(row.ItemId) ?? 0;
+            var fresh = got - alreadyBanked;
+            if (fresh <= 0) continue;
 
             var name = ItemSearch.FindById(row.ItemId);
             if (string.IsNullOrEmpty(name)) name = $"#{row.ItemId}";
 
-            banked.Add(row.ItemId);
-            if (got >= row.Quantity)
+            if (_plan != null) _plan.Banked[row.ItemId] = got;
+
+            if (fresh >= row.Quantity)
             {
                 row.Enabled = false;
                 finished.Add(name);
             }
             else
             {
-                var remaining = row.Quantity - got;
+                var remaining = row.Quantity - fresh;
                 row.Quantity = remaining;
                 reduced.Add($"{name} x{remaining}");
             }
@@ -1142,12 +1203,10 @@ public sealed class BuyRunner
         if (finished.Count == 0 && reduced.Count == 0) return;
         Cfg.Save();
 
-        // Progress has now been BANKED into the shopping list, so the plan's tally must go back to
-        // zero or the two would double-count: the row says "2 left" and the tally still says
-        // "3 bought", and the next SEND would compute a target of nothing at all. Exactly one of
-        // them owns the outstanding need at any moment, and after this point it's the list.
-        if (_plan != null)
-            foreach (var id in banked) _plan.Bought.Remove(id);
+        // The plan's tally is deliberately left alone. The shopping list is the target for the
+        // NEXT scan; the plan tracks progress against the CURRENT one. They count different
+        // things, so clearing the tally here would make the Buy Plan window forget purchases you
+        // can plainly see in your bags — and blank out its Bought column mid-order.
 
         if (finished.Count > 0)
             Log(finished.Count <= 6

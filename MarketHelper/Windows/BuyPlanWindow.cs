@@ -62,7 +62,11 @@ public sealed class BuyPlanWindow : Window
 
         WrapText(Grey, $"Scanned {plan.Scope} at {plan.ScannedAt:HH:mm:ss}");
         if (plan.HasWork)
-            ImGui.TextColored(Green, $"{plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s) — about {plan.GrandTotal:N0}g.");
+        {
+            var done = plan.Bought.Values.Sum();
+            ImGui.TextColored(Green, $"{plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s) — about {plan.GrandTotal:N0}g."
+                + (done > 0 ? $"  Bought so far: {done}." : ""));
+        }
         else
             ImGui.TextColored(Red, "Nothing available at or under your price caps.");
 
@@ -79,6 +83,11 @@ public sealed class BuyPlanWindow : Window
             ImGui.SameLine(0, SW(8));
             if (ImGui.Button("RESUME", new Vector2(SW(100), 0))) runner.Resume();
         }
+        else if (runner.Running)
+        {
+            ImGui.SameLine(0, SW(8));
+            if (ImGui.Button("Pause", new Vector2(SW(80), 0))) runner.PauseByUser();
+        }
         if (runner.Running)
         {
             ImGui.SameLine(0, SW(8));
@@ -94,7 +103,7 @@ public sealed class BuyPlanWindow : Window
             ImGui.SameLine(0, SW(8));
             if (ImGui.Button("Reset progress##resetbought"))
             {
-                plan.Bought.Clear();
+                plan.ClearProgress();
                 _plugin.Chat("[Market Helper] Buy progress for this plan cleared.");
             }
         }

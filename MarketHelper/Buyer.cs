@@ -107,6 +107,35 @@ public sealed class BuyPlanResult
 
     public int BoughtFor(uint itemId) => Bought.TryGetValue(itemId, out var n) ? n : 0;
 
+    /// <summary>
+    /// Units bought at a specific stop, keyed "stopIndex|itemId". A stop must not re-buy its whole
+    /// allocation on a second SEND just because it was interrupted partway — this is what lets it
+    /// pick up the 1 it still owes instead of the 3 it was originally given.
+    /// </summary>
+    public readonly Dictionary<string, int> StopProgress = new();
+
+    public static string StopKey(int stopIndex, uint itemId) => $"{stopIndex}|{itemId}";
+
+    public int BoughtAtStop(int stopIndex, uint itemId)
+        => StopProgress.TryGetValue(StopKey(stopIndex, itemId), out var n) ? n : 0;
+
+    /// <summary>
+    /// Units already written back to the shopping list. Bought is CUMULATIVE for the whole plan,
+    /// but the list gets deducted each time a run ends — so banking must only ever push the
+    /// difference. Without this, stopping twice deducts the same purchases twice and unticks an
+    /// order that still has units outstanding.
+    /// </summary>
+    public readonly Dictionary<uint, int> Banked = new();
+
+    public int BankedFor(uint itemId) => Banked.TryGetValue(itemId, out var n) ? n : 0;
+
+    public void ClearProgress()
+    {
+        Bought.Clear();
+        StopProgress.Clear();
+        Banked.Clear();
+    }
+
     public long GrandTotal => Stops.Sum(s => s.TotalCost);
     public int GrandUnits => Stops.Sum(s => s.TotalUnits);
     public bool HasWork => Stops.Any(s => s.Lines.Count > 0);

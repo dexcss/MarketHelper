@@ -539,6 +539,11 @@ public partial class MainWindow
             ImGui.SameLine(0, SW(10));
             if (ImGui.Button("RESUME##buyresume", new Vector2(SW(120), SW(30)))) runner.Resume();
         }
+        else if (runner.Running)
+        {
+            ImGui.SameLine(0, SW(10));
+            if (ImGui.Button("Pause##buypause", new Vector2(SW(80), SW(30)))) runner.PauseByUser();
+        }
         if (runner.Running)
         {
             ImGui.SameLine(0, SW(10));
