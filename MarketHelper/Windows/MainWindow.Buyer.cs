@@ -417,6 +417,11 @@ public partial class MainWindow
         if (ImGui.TreeNode("Advanced — board click opcodes"))
         {
             WrapText(Grey, "Only change these if a game patch breaks the buy path. Run \"/undercut buydump\" at an open board and read the output first.");
+            var forceReq = Cfg.BuyerForceListingRequest;
+            if (ImGui.Checkbox("Also request listings directly from the proxy", ref forceReq)) { Cfg.BuyerForceListingRequest = forceReq; Cfg.Save(); }
+            ImGui.SameLine(0, SW(6));
+            HelpMarker("Off by default. Clicking the result row already loads the listings; forcing a second request on top can leave the game reporting that it's still waiting for data.");
+
             var learn = Cfg.BuyerLearnEvents;
             if (ImGui.Checkbox("Learn mode — log board events", ref learn)) { Cfg.BuyerLearnEvents = learn; Cfg.Save(); _plugin.Buy.ApplyLearnMode(); }
             ImGui.SameLine(0, SW(6));

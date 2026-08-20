@@ -202,6 +202,11 @@ public class Configuration : IPluginConfiguration
     // Fallback callback opcode for the board's Search button, used only by the retry ladder.
     public int BuyerSearchButtonOpcode { get; set; } = 0;
 
+    // Also ask InfoProxyItemSearch for the listings directly (proxy->SearchItemId + RequestData).
+    // OFF by default: the row click loads them on its own, and forcing a second request can leave
+    // the proxy stuck reporting that it's still waiting.
+    public bool BuyerForceListingRequest { get; set; } = false;
+
     // Atk event codes for the two list-row clicks, captured live with learn mode:
     //   ItemSearch results      -> ListItemClick(35), component param 3
     //   ItemSearchResult listing -> ListItemClick(35), component param 0

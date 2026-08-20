@@ -316,21 +316,24 @@ public static unsafe class MarketBoard
     /// Rows belonging to a previous search are rejected by comparing each row's own ItemId to the
     /// proxy's SearchItemId — the same stale-row defence MarketData uses.
     /// </summary>
-    public static List<BoardListing> Listings()
+    public static List<BoardListing> Listings(uint expectedItemId)
     {
         var result = new List<BoardListing>();
         var proxy = MarketData.GetProxy();
         if (proxy == null) return result;
 
-        var searchId = proxy->SearchItemId;
-        if (searchId == 0) return result;
+        // Filter on the item WE asked for, not on the proxy's SearchItemId. Browsing the board
+        // doesn't necessarily set SearchItemId the way the retainer "Compare Prices" flow does,
+        // and keying off it meant a fully populated listings window still read as empty.
+        var len = proxy->Listings.Length;
+        var count = (int)Math.Min(proxy->ListingCount, (uint)len);
+        if (count <= 0) count = len;   // count not set by this path — scan the array and filter
 
-        var count = (int)Math.Min(proxy->ListingCount, (uint)proxy->Listings.Length);
-        for (var i = 0; i < count; i++)
+        for (var i = 0; i < count && i < len; i++)
         {
             ref var l = ref proxy->Listings[i];
-            if (l.ItemId != searchId) continue;
             if (l.UnitPrice == 0) continue;
+            if (!IsSameItem(l.ItemId, expectedItemId)) continue;
             result.Add(new BoardListing(
                 i, l.ItemId, l.UnitPrice, l.TotalTax, (int)l.Quantity, l.IsHqItem, l.CharacterName.ToString()));
         }
@@ -339,14 +342,48 @@ public static unsafe class MarketBoard
         return result;
     }
 
+    /// <summary>HQ listings carry itemId + 1,000,000, so both forms count as the same item.</summary>
+    private static bool IsSameItem(uint listingItemId, uint expected)
+        => listingItemId == expected || listingItemId == expected + 1_000_000;
+
     /// <summary>True once listings for the expected item are actually readable.</summary>
     public static bool ListingsReadyFor(uint itemId)
     {
         var proxy = MarketData.GetProxy();
         if (proxy == null) return false;
         if (proxy->WaitingForListings) return false;
-        if (proxy->SearchItemId != itemId) return false;
-        return Listings().Count > 0;
+        return Listings(itemId).Count > 0;
+    }
+
+    /// <summary>
+    /// Why the listings aren't readable yet — printed with the give-up message so the failure
+    /// explains itself instead of costing another test run.
+    /// </summary>
+    public static string ListingsDiagnostic(uint itemId)
+    {
+        var proxy = MarketData.GetProxy();
+        if (proxy == null) return "proxy=null";
+
+        var len = proxy->Listings.Length;
+        var raw = (int)Math.Min(proxy->ListingCount, (uint)len);
+        var nonZero = 0;
+        var matching = 0;
+        uint firstId = 0;
+        for (var i = 0; i < len; i++)
+        {
+            ref var l = ref proxy->Listings[i];
+            if (l.UnitPrice == 0) continue;
+            nonZero++;
+            if (firstId == 0) firstId = l.ItemId;
+            if (IsSameItem(l.ItemId, itemId)) matching++;
+        }
+
+        var agent = AgentItemSearch.Instance();
+        var resultItemId = agent == null ? 0 : agent->ResultItemId;
+
+        return $"want={itemId} proxySearchId={proxy->SearchItemId} waiting={proxy->WaitingForListings} " +
+               $"listingCount={raw} nonZeroRows={nonZero} matchingRows={matching} firstRowItemId={firstId} " +
+               $"agentResultItemId={resultItemId} resultsWindow={ResultsOpen}";
     }
 
     /// <summary>
@@ -484,7 +521,7 @@ public static unsafe class MarketBoard
         else
         {
             lines.Add($"Proxy: searchItemId={proxy->SearchItemId} listingCount={proxy->ListingCount} waiting={proxy->WaitingForListings}");
-            var listings = Listings();
+            var listings = Listings(proxy->SearchItemId);
             for (var i = 0; i < listings.Count && i < 12; i++)
             {
                 var l = listings[i];

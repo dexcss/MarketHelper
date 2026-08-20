@@ -335,8 +335,8 @@ public sealed class BuyRunner
                     // UI (which we need open to buy); the proxy request is struct-verified and
                     // loads the listing data even if the click's callback case is wrong.
                     var click = MarketBoard.SelectResultRow(row, Cfg.BuyerResultRowEventType, Cfg.BuyerResultRowEventParam);
-                    var req = MarketBoard.RequestListings(_item);
-                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: {click}; {req}");
+                    var req = Cfg.BuyerForceListingRequest ? "; " + MarketBoard.RequestListings(_item) : string.Empty;
+                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: {click}{req}");
                     _ticks = 0;
                     Wait(700);
                     State = BuyState.WaitListings;
@@ -437,16 +437,16 @@ public sealed class BuyRunner
                     State = BuyState.PickListing;
                     return;
                 }
-                // Nudge the request again a couple of times before giving up — a dropped request
-                // is far more likely than the server genuinely having nothing.
-                if (_ticks == 10 || _ticks == 25)
+                if (Cfg.BuyerForceListingRequest && (_ticks == 10 || _ticks == 25))
                 {
                     var again = MarketBoard.RequestListings(_item);
                     if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: re-request -> {again}");
                 }
                 if (++_ticks > 40)
                 {
-                    Log($"{_itemName}: listings never loaded — skipping.");
+                    // The diagnostic goes in the message itself — a bare "never loaded" costs a
+                    // whole extra test run to explain.
+                    Log($"{_itemName}: listings never loaded — skipping. [{MarketBoard.ListingsDiagnostic(_item)}]");
                     State = BuyState.NextItem;
                     return;
                 }
@@ -472,7 +472,7 @@ public sealed class BuyRunner
                     return;
                 }
 
-                var listings = MarketBoard.Listings()
+                var listings = MarketBoard.Listings(_item)
                     .Where(l => l.UnitPrice <= _cap)
                     .Where(l => !_hqOnly || l.Hq)
                     .Where(l => Cfg.BuyerAllowOvershoot || l.Quantity <= remaining)
