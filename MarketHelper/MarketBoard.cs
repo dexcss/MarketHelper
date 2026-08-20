@@ -228,11 +228,11 @@ public static unsafe class MarketBoard
         catch (Exception ex) { return $"RequestData FAILED({ex.GetType().Name}: {ex.Message})"; }
     }
 
-    /// <summary>Diagnostic: send one event type to the result list, for "/undercut buytry".</summary>
-    public static string TryResultOpcode(int eventType, int row)
+    /// <summary>Diagnostic: send one event to the result list, for "/undercut buytry &lt;param&gt; [row]".</summary>
+    public static string TryResultOpcode(int eventParam, int row)
     {
         if (GetItemSearch() == null) return "no ItemSearch addon — open a market board first";
-        var detail = SelectResultRow(row, eventType, 0);
+        var detail = SelectResultRow(row, 35, eventParam);
         return $"{detail} — check whether the listings window opened";
     }
 
@@ -262,19 +262,32 @@ public static unsafe class MarketBoard
     }
 
     /// <summary>
-    /// Click a row in the board's search results, opening that item's listings. Sends a real
-    /// ListItemClick to the results list rather than an addon callback.
+    /// Click a row in the board's search results, opening that item's listings.
+    ///
+    /// Learn mode showed exactly what the game does when you click a result by hand:
+    ///   FocusStart(18) param=3, ListItemClick(35) param=3, FocusStop(19) param=3
+    /// The parameter is the LIST COMPONENT's event id (3 for ItemSearch's results, 0 for
+    /// ItemSearchResult's listings) — it is NOT the row index, which was the wrong assumption
+    /// before. The row comes from the list's own SelectedItemIndex, which the mouse sets while
+    /// hovering, so we set it ourselves and then replay the same event sequence.
     /// </summary>
-    public static string SelectResultRow(int row, int eventType, int eventParamOffset)
+    public static string SelectResultRow(int row, int eventType, int eventParam)
     {
         var addon = GetItemSearch();
-        if (addon == null || row < 0) return "selectRow: no addon";
+        if (addon == null || row < 0) return "selectRow: no ItemSearch addon";
         try
         {
             var list = addon->ResultsList;
-            var target = list == null ? null : (AtkResNode*)list->AtkComponentBase.OwnerNode;
-            SendEvent(&addon->AtkUnitBase, target, (AtkEventType)eventType, row + eventParamOffset);
-            return $"row click: type={eventType} param={row + eventParamOffset} target={(target == null ? "null" : "list")}";
+            if (list == null) return "selectRow: results list is null";
+
+            list->SelectedItemIndex = row;
+            var target = (AtkResNode*)list->AtkComponentBase.OwnerNode;
+            var unit = &addon->AtkUnitBase;
+
+            SendEvent(unit, target, AtkEventType.FocusStart, eventParam);
+            SendEvent(unit, target, (AtkEventType)eventType, eventParam);
+            SendEvent(unit, target, AtkEventType.FocusStop, eventParam);
+            return $"row click: idx={row} type={eventType} param={eventParam}";
         }
         catch (Exception ex) { return $"row click FAILED({ex.GetType().Name}: {ex.Message})"; }
     }
@@ -338,18 +351,25 @@ public static unsafe class MarketBoard
 
     /// <summary>
     /// Click a listing row to start a purchase. Raises the game's confirm dialog, which BuyRunner
-    /// then verifies before answering. Same ListItemClick mechanism as the search results.
+    /// then verifies before answering. Same mechanism as the search results: set the list's
+    /// selected row, then send the list component's own click event.
     /// </summary>
-    public static string ClickListing(int index, int eventType, int eventParamOffset)
+    public static string ClickListing(int index, int eventType, int eventParam)
     {
         var addon = GetItemSearchResult();
         if (addon == null || index < 0) return "clickListing: no ItemSearchResult addon";
         try
         {
             var list = addon->Results;
-            var target = list == null ? null : (AtkResNode*)list->AtkComponentBase.OwnerNode;
-            SendEvent(&addon->AtkUnitBase, target, (AtkEventType)eventType, index + eventParamOffset);
-            return $"listing click: type={eventType} param={index + eventParamOffset} target={(target == null ? "null" : "list")}";
+            if (list == null) return "clickListing: listing list is null";
+
+            list->SelectedItemIndex = index;
+            var target = (AtkResNode*)list->AtkComponentBase.OwnerNode;
+            var unit = &addon->AtkUnitBase;
+
+            SendEvent(unit, target, AtkEventType.FocusStart, eventParam);
+            SendEvent(unit, target, (AtkEventType)eventType, eventParam);
+            return $"listing click: idx={index} type={eventType} param={eventParam}";
         }
         catch (Exception ex) { return $"listing click FAILED({ex.GetType().Name}: {ex.Message})"; }
     }

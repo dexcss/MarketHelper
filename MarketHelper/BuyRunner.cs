@@ -334,7 +334,7 @@ public sealed class BuyRunner
                     // Two ways of loading the listings, on purpose. The row click drives the real
                     // UI (which we need open to buy); the proxy request is struct-verified and
                     // loads the listing data even if the click's callback case is wrong.
-                    var click = MarketBoard.SelectResultRow(row, Cfg.BuyerResultRowEventType, Cfg.BuyerResultRowParamOffset);
+                    var click = MarketBoard.SelectResultRow(row, Cfg.BuyerResultRowEventType, Cfg.BuyerResultRowEventParam);
                     var req = MarketBoard.RequestListings(_item);
                     if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: {click}; {req}");
                     _ticks = 0;
@@ -410,7 +410,7 @@ public sealed class BuyRunner
                 var manualRow = MarketBoard.FindResultRow(_item);
                 if (manualRow >= 0)
                 {
-                    MarketBoard.SelectResultRow(manualRow, Cfg.BuyerResultRowEventType, Cfg.BuyerResultRowParamOffset);
+                    MarketBoard.SelectResultRow(manualRow, Cfg.BuyerResultRowEventType, Cfg.BuyerResultRowEventParam);
                     _ticks = 0;
                     Wait(700);
                     State = BuyState.WaitListings;
@@ -539,7 +539,7 @@ public sealed class BuyRunner
                 }
 
                 Status = $"Buying {pick.Quantity}x {_itemName} at {pick.UnitPrice:N0}g...";
-                var lc = MarketBoard.ClickListing(pick.Index, Cfg.BuyerListingRowEventType, Cfg.BuyerListingRowParamOffset);
+                var lc = MarketBoard.ClickListing(pick.Index, Cfg.BuyerListingRowEventType, Cfg.BuyerListingRowEventParam);
                 if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: buying rawIdx={pick.Index} {pick.UnitPrice:N0}g x{pick.Quantity} — {lc}");
                 _gilBeforeBuy = gil;
                 _ticks = 0;
@@ -552,6 +552,14 @@ public sealed class BuyRunner
             {
                 if (!MarketBoard.ConfirmVisible)
                 {
+                    // Some purchases complete without a confirmation dialog. Gil leaving the
+                    // wallet is the real proof, so check that before calling it a failure.
+                    if (MarketBoard.Gil() < _gilBeforeBuy)
+                    {
+                        _ticks = 0;
+                        State = BuyState.WaitPurchase;
+                        return;
+                    }
                     if (++_ticks > 24)
                     {
                         Log($"{_itemName}: no confirmation dialog appeared — skipping this item.");

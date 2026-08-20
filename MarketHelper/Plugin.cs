@@ -127,8 +127,8 @@ public sealed class Plugin : IDalamudPlugin
             var parts = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 2 || !int.TryParse(parts[1], out var opcode))
             {
-                Chat("[Market Helper] Usage: /undercut buytry <number>  (e.g. /undercut buytry 3)");
-                Chat("[Market Helper] Search an item on the board first, then try cases one at a time until the listings window opens.");
+                Chat("[Market Helper] Usage: /undercut buytry <listParam> [row]  (e.g. /undercut buytry 3 0)");
+                Chat("[Market Helper] Search an item on the board first. listParam is the results list's component id (3 on live), not the row number.");
             }
             else
             {

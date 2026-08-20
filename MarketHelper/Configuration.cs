@@ -202,14 +202,15 @@ public class Configuration : IPluginConfiguration
     // Fallback callback opcode for the board's Search button, used only by the retry ladder.
     public int BuyerSearchButtonOpcode { get; set; } = 0;
 
-    // Atk event codes for the two list-row clicks. 35 = AtkEventType.ListItemClick, which is what
-    // the game sends when you click a row in an AtkComponentList; the parameter is the row index.
-    // Exposed (with a learn mode to capture the real values) because these are the only numbers in
-    // the buy path that a game patch could move.
+    // Atk event codes for the two list-row clicks, captured live with learn mode:
+    //   ItemSearch results      -> ListItemClick(35), component param 3
+    //   ItemSearchResult listing -> ListItemClick(35), component param 0
+    // The param identifies the LIST COMPONENT, not the row; the row is set via the list's own
+    // SelectedItemIndex. Kept in config so a game patch can be corrected without a rebuild.
     public int BuyerResultRowEventType { get; set; } = 35;
-    public int BuyerResultRowParamOffset { get; set; } = 0;
+    public int BuyerResultRowEventParam { get; set; } = 3;
     public int BuyerListingRowEventType { get; set; } = 35;
-    public int BuyerListingRowParamOffset { get; set; } = 0;
+    public int BuyerListingRowEventParam { get; set; } = 0;
 
     // Log every event the board addons receive, so clicking a row by hand reveals the exact
     // event type and parameter to use. Off by default — it is very chatty.

@@ -425,16 +425,16 @@ public partial class MainWindow
             var rowType = Cfg.BuyerResultRowEventType;
             ImGui.SetNextItemWidth(SW(120));
             if (ImGui.InputInt("Result row event", ref rowType, 1)) { Cfg.BuyerResultRowEventType = rowType; Cfg.Save(); }
-            var rowOff = Cfg.BuyerResultRowParamOffset;
+            var rowOff = Cfg.BuyerResultRowEventParam;
             ImGui.SetNextItemWidth(SW(120));
-            if (ImGui.InputInt("Result row param offset", ref rowOff, 1)) { Cfg.BuyerResultRowParamOffset = rowOff; Cfg.Save(); }
+            if (ImGui.InputInt("Result row param", ref rowOff, 1)) { Cfg.BuyerResultRowEventParam = rowOff; Cfg.Save(); }
 
             var listType = Cfg.BuyerListingRowEventType;
             ImGui.SetNextItemWidth(SW(120));
             if (ImGui.InputInt("Listing row event", ref listType, 1)) { Cfg.BuyerListingRowEventType = listType; Cfg.Save(); }
-            var listOff = Cfg.BuyerListingRowParamOffset;
+            var listOff = Cfg.BuyerListingRowEventParam;
             ImGui.SetNextItemWidth(SW(120));
-            if (ImGui.InputInt("Listing row param offset", ref listOff, 1)) { Cfg.BuyerListingRowParamOffset = listOff; Cfg.Save(); }
+            if (ImGui.InputInt("Listing row param", ref listOff, 1)) { Cfg.BuyerListingRowEventParam = listOff; Cfg.Save(); }
             var searchBtn = Cfg.BuyerSearchButtonOpcode;
             ImGui.SetNextItemWidth(SW(120));
             if (ImGui.InputInt("Search button (fallback)", ref searchBtn, 1)) { Cfg.BuyerSearchButtonOpcode = searchBtn; Cfg.Save(); }
