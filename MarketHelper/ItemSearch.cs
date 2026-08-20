@@ -65,6 +65,30 @@ public static class ItemSearch
         return _byId.TryGetValue(id, out var name) ? name : string.Empty;
     }
 
+    /// <summary>
+    /// Exact (case-insensitive) name lookup over MARKETABLE items. Returns 0 if not found.
+    /// Used by the MakePlace importer, which has full item names and must not fuzzy-match —
+    /// "Everkeep Sofa" and "Curved Everkeep Sofa" are different furnishings.
+    /// </summary>
+    public static uint FindExact(string name)
+    {
+        var n = (name ?? string.Empty).Trim();
+        if (n.Length == 0) return 0;
+        foreach (var h in Marketable())
+            if (string.Equals(h.Name, n, StringComparison.OrdinalIgnoreCase)) return h.Id;
+        return 0;
+    }
+
+    /// <summary>Exact name lookup over ALL items, marketable or not. Returns 0 if not found.</summary>
+    public static uint FindExactAny(string name)
+    {
+        var n = (name ?? string.Empty).Trim();
+        if (n.Length == 0) return 0;
+        foreach (var h in AllItems())
+            if (string.Equals(h.Name, n, StringComparison.OrdinalIgnoreCase)) return h.Id;
+        return 0;
+    }
+
     // ---- Unfiltered index: ALL named items, including market-prohibited ones. Used by the Item
     // Gatherer, which just moves items between retainer and bags and doesn't care about the market.
 

@@ -50,6 +50,7 @@ public sealed class BuyRunner
     private uint _item;
     private string _itemName = string.Empty;
     private long _cap;
+    private bool _capped;
     private int _wantUnits;
     private bool _hqOnly;
 
@@ -111,6 +112,7 @@ public sealed class BuyRunner
         _item = 0;
         _itemName = string.Empty;
         _cap = 0;
+        _capped = true;
         _wantUnits = 0;
         _hqOnly = false;
 
@@ -328,12 +330,15 @@ public sealed class BuyRunner
                 // The cap always comes from the CONFIG row, not the plan — if you lowered your max
                 // price after scanning, the lower number wins.
                 var cfgRow = Cfg.BuyerItems.FirstOrDefault(i => i.ItemId == _item);
-                _cap = cfgRow?.MaxPrice ?? lines.Max(l => l.UnitPrice);
+                _cap = cfgRow?.EffectiveCap ?? lines.Max(l => l.UnitPrice);
+                _capped = cfgRow?.UseMaxPrice ?? true;
                 if (cfgRow != null) _hqOnly = cfgRow.HqOnly;
 
                 _buysThisItem = 0;
                 _lastListingCount = 0;
-                Log($"{_itemName}: want {_wantUnits} unit(s) at or under {_cap:N0}g each.");
+                Log(_capped
+                    ? $"{_itemName}: want {_wantUnits} unit(s) at or under {_cap:N0}g each."
+                    : $"{_itemName}: want the {_wantUnits} cheapest unit(s) (no price cap).");
                 State = BuyState.Search;
                 return;
             }
@@ -548,7 +553,9 @@ public sealed class BuyRunner
 
                 if (listings.Count == 0)
                 {
-                    Log($"{_itemName}: nothing left at or under {_cap:N0}g here ({boughtSoFar}/{_wantUnits} bought).");
+                    Log(_capped
+                        ? $"{_itemName}: nothing left at or under {_cap:N0}g here ({boughtSoFar}/{_wantUnits} bought)."
+                        : $"{_itemName}: no more listings here ({boughtSoFar}/{_wantUnits} bought).");
                     State = BuyState.NextItem;
                     return;
                 }
@@ -749,6 +756,12 @@ public sealed class BuyRunner
 
     private void RecordBought(uint itemId, int qty)
         => _bought[itemId] = (_bought.TryGetValue(itemId, out var n) ? n : 0) + qty;
+
+    /// <summary>Units bought (or, in a dry run, accounted for) this run — for the plan's Bought column.</summary>
+    public int BoughtFor(uint itemId) => _bought.TryGetValue(itemId, out var n) ? n : 0;
+
+    /// <summary>True once a run has produced numbers worth showing.</summary>
+    public bool HasRunResults => _bought.Count > 0;
 
     private int UnitsBoughtFor(uint itemId)
         => _bought.TryGetValue(itemId, out var n) ? n : 0;

@@ -19,9 +19,18 @@ public class BuyerItem
 {
     public uint ItemId { get; set; }
     public int Quantity { get; set; } = 1;
-    public long MaxPrice { get; set; } = 1000;   // never pay more than this PER UNIT
+
+    // Price ceiling per unit, applied ONLY when UseMaxPrice is on. Off by default: the normal
+    // case is "buy me the N cheapest of these", and a cap is the exception you opt into.
+    public bool UseMaxPrice { get; set; }
+    public long MaxPrice { get; set; } = 1000;
+
     public bool HqOnly { get; set; }
     public bool Enabled { get; set; } = true;
+
+    /// <summary>The cap to actually enforce — no ceiling at all when the cap is switched off.</summary>
+    [Newtonsoft.Json.JsonIgnore]
+    public long EffectiveCap => UseMaxPrice ? MaxPrice : long.MaxValue;
 }
 
 [Serializable]
@@ -135,8 +144,15 @@ public class Configuration : IPluginConfiguration
     public float ListerOutlierGapPercent { get; set; } = 15.0f;
 
     // --- Buyer settings ---
-    // Shopping list: what to buy, how many, and the hard per-unit price ceiling for each.
+    // Shopping list: what to buy, how many, and (optionally) a hard per-unit price ceiling.
     public List<BuyerItem> BuyerItems { get; set; } = new();
+
+    // Lines from an imported MakePlace list that can't be bought on the market board, kept so the
+    // Buyer tab can show you what it couldn't take.
+    public List<string> BuyerUnbuyable { get; set; } = new();
+
+    // Whether newly added items get a price cap by default, and what it is.
+    public bool BuyerNewItemUseMaxPrice { get; set; } = false;
 
     // Dry run is ON by default and deliberately so: the Buyer spends real gil, and the first run
     // on any new setup should prove the route and the prices without touching the wallet.

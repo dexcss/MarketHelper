@@ -54,6 +54,7 @@ public sealed class ItemSummary
     public string CheapestWorld = string.Empty;
     public string CheapestDataCenter = string.Empty;
     public long MaxPrice;
+    public bool Capped;              // false = no price ceiling on this item
     public bool AnyListingsAtAll;
     public readonly Dictionary<string, (int Units, long Cheapest)> PerWorld = new();
 
@@ -64,7 +65,8 @@ public sealed class ItemSummary
     public readonly List<CheapestListing> Cheapest = new();
 
     public bool Satisfied => FoundUnits >= Requested;
-    public bool NothingUnderCap => AnyListingsAtAll && FoundUnits == 0;
+    public bool NothingUnderCap => Capped && AnyListingsAtAll && FoundUnits == 0;
+    public string CapText => Capped ? $"{MaxPrice:N0}g" : "none";
 }
 
 /// <summary>The full result of a scan: what to buy, where, and what it'll cost.</summary>
@@ -250,7 +252,10 @@ public sealed class Buyer
                     ItemName = name,
                     Requested = item.Quantity,
                     MaxPrice = item.MaxPrice,
+                    Capped = item.UseMaxPrice,
                 };
+
+                var cap = item.EffectiveCap;
 
                 // One query per location, fired in parallel — the same shape the Flipper tab has
                 // used reliably for cross-region lookups. Universalis has no "several DCs at once"
@@ -320,7 +325,7 @@ public sealed class Buyer
                 foreach (var l in listings)
                 {
                     if (remaining <= 0) break;
-                    if (l.PricePerUnit > item.MaxPrice) break;   // sorted, so everything after is dearer
+                    if (l.PricePerUnit > cap) break;   // sorted, so everything after is dearer
 
                     // A market listing is bought whole — you cannot take part of a stack.
                     if (l.Quantity > remaining && !allowOvershoot) continue;

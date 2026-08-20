@@ -118,13 +118,17 @@ public sealed class BuyPlanWindow : Window
             Dummy(4f);
         }
 
-        if (!ImGui.BeginTable("##planitems", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        var runner = _plugin.Buy;
+        var boughtHeader = runner.DryRun ? "Bought (dry)" : "Bought";
+
+        if (!ImGui.BeginTable("##planitems", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.0f);
         ImGui.TableSetupColumn("Want", ImGuiTableColumnFlags.WidthFixed, SW(50));
-        ImGui.TableSetupColumn("Found", ImGuiTableColumnFlags.WidthFixed, SW(60));
-        ImGui.TableSetupColumn("Cap", ImGuiTableColumnFlags.WidthFixed, SW(90));
+        ImGui.TableSetupColumn("Found", ImGuiTableColumnFlags.WidthFixed, SW(55));
+        ImGui.TableSetupColumn(boughtHeader, ImGuiTableColumnFlags.WidthFixed, SW(80));
+        ImGui.TableSetupColumn("Cap", ImGuiTableColumnFlags.WidthFixed, SW(80));
         ImGui.TableSetupColumn("Cheapest", ImGuiTableColumnFlags.WidthStretch, 1.6f);
         ImGui.TableHeadersRow();
 
@@ -133,14 +137,30 @@ public sealed class BuyPlanWindow : Window
             ImGui.TableNextRow();
             ImGui.TableNextColumn(); ImGui.TextUnformatted(it.ItemName);
             ImGui.TableNextColumn(); ImGui.TextUnformatted(it.Requested.ToString());
+
             ImGui.TableNextColumn();
             ImGui.TextColored(it.Satisfied ? Green : it.FoundUnits > 0 ? Gold : Red, it.FoundUnits.ToString());
-            ImGui.TableNextColumn(); ImGui.TextUnformatted($"{it.MaxPrice:N0}g");
+
+            // Bought: what the last run actually moved. Blank until a run has produced numbers,
+            // so an untouched plan doesn't read as "bought 0".
+            ImGui.TableNextColumn();
+            if (!runner.HasRunResults)
+            {
+                ImGui.TextColored(Grey, "-");
+            }
+            else
+            {
+                var got = runner.BoughtFor(it.ItemId);
+                ImGui.TextColored(got >= it.Requested ? Green : got > 0 ? Gold : Red, got.ToString());
+            }
+
+            ImGui.TableNextColumn(); ImGui.TextUnformatted(it.CapText);
+
             ImGui.TableNextColumn();
             if (!it.AnyListingsAtAll)
                 ImGui.TextColored(Red, "no listings");
             else
-                ImGui.TextColored(it.CheapestPrice <= it.MaxPrice ? Green : Red,
+                ImGui.TextColored(!it.Capped || it.CheapestPrice <= it.MaxPrice ? Green : Red,
                     $"{it.CheapestPrice:N0}g on {it.CheapestWorld}"
                     + (string.IsNullOrWhiteSpace(it.CheapestDataCenter) ? "" : $" [{it.CheapestDataCenter}]"));
         }
@@ -156,7 +176,9 @@ public sealed class BuyPlanWindow : Window
 
             if (it.PerWorld.Count > 0)
             {
-                ImGui.TextColored(Grey, $"Available at or under {it.MaxPrice:N0}g:");
+                ImGui.TextColored(Grey, it.Capped
+                    ? $"Available at or under {it.MaxPrice:N0}g:"
+                    : "Available (no price cap):");
                 foreach (var kv in it.PerWorld)
                     ImGui.TextColored(Green, $"    {kv.Key} — {kv.Value.Units} available from {kv.Value.Cheapest:N0}g");
             }
@@ -168,10 +190,10 @@ public sealed class BuyPlanWindow : Window
             if (it.Cheapest.Count > 0)
             {
                 Dummy(2f);
-                ImGui.TextColored(Grey, $"Cheapest {it.Cheapest.Count} in scope (regardless of your cap):");
+                ImGui.TextColored(Grey, $"Cheapest {it.Cheapest.Count} in scope:");
                 foreach (var c in it.Cheapest)
                 {
-                    var underCap = c.UnitPrice <= it.MaxPrice;
+                    var underCap = !it.Capped || c.UnitPrice <= it.MaxPrice;
                     var dcTag = string.IsNullOrWhiteSpace(c.DataCenter) ? "" : $" [{c.DataCenter}]";
                     ImGui.TextColored(underCap ? Green : Grey,
                         $"    {c.UnitPrice:N0}g  x{c.Quantity}{(c.Hq ? " HQ" : "")}  —  {c.World}{dcTag}{(underCap ? "" : "  (over cap)")}");

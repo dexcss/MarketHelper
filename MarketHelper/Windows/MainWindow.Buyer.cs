@@ -21,6 +21,8 @@ public partial class MainWindow
 
         DrawBuyerAddRow();
         Divider();
+        DrawMakePlaceImport();
+        Divider();
         DrawBuyerList();
         Divider();
         DrawBuyerScope();
@@ -49,10 +51,17 @@ public partial class MainWindow
         ImGui.SetNextItemWidth(SW(80));
         if (ImGui.InputInt("Qty##buyqty", ref _buyerAddQty, 1)) _buyerAddQty = Math.Max(1, _buyerAddQty);
         ImGui.SameLine(0, SW(10));
-        ImGui.SetNextItemWidth(SW(120));
-        if (ImGui.InputInt("Max price each##buymax", ref _buyerAddMax, 100)) _buyerAddMax = Math.Max(1, _buyerAddMax);
+
+        var newCap = Cfg.BuyerNewItemUseMaxPrice;
+        if (ImGui.Checkbox("Cap price##buynewcap", ref newCap)) { Cfg.BuyerNewItemUseMaxPrice = newCap; Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
-        HelpMarker("Applied to items you add from here. Each row's cap can be edited afterwards. The Buyer NEVER pays more than this per unit.");
+        using (ImRaiiDisabled(!Cfg.BuyerNewItemUseMaxPrice))
+        {
+            ImGui.SetNextItemWidth(SW(120));
+            if (ImGui.InputInt("Max each##buymax", ref _buyerAddMax, 100)) _buyerAddMax = Math.Max(1, _buyerAddMax);
+        }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Off by default: the Buyer just takes the cheapest of whatever you asked for. Tick this to refuse anything above a price per unit — the cap can be set per row afterwards.");
 
         ImGui.SetNextItemWidth(SW(260));
         ImGui.InputTextWithHint("##buysearch", "search an item to add", ref _buyerSearch, 100);
@@ -85,6 +94,7 @@ public partial class MainWindow
         {
             ItemId = id,
             Quantity = Math.Max(1, _buyerAddQty),
+            UseMaxPrice = Cfg.BuyerNewItemUseMaxPrice,
             MaxPrice = Math.Max(1, _buyerAddMax),
         });
         Cfg.Save();
@@ -96,14 +106,16 @@ public partial class MainWindow
         if (Cfg.BuyerItems.Count == 0)
         {
             ImGui.TextColored(Grey, "  (empty — add items above)");
+            DrawUnbuyableReport();   // an import can resolve nothing and still have plenty to report
             return;
         }
 
-        if (ImGui.BeginTable("##buyertable", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        if (ImGui.BeginTable("##buyertable", 7, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
         {
             ImGui.TableSetupColumn("On", ImGuiTableColumnFlags.WidthFixed, SW(30));
             ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.0f);
             ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, SW(70));
+            ImGui.TableSetupColumn("Cap", ImGuiTableColumnFlags.WidthFixed, SW(34));
             ImGui.TableSetupColumn("Max each", ImGuiTableColumnFlags.WidthFixed, SW(100));
             ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, SW(34));
             ImGui.TableSetupColumn("##del", ImGuiTableColumnFlags.WidthFixed, SW(28));
@@ -129,9 +141,16 @@ public partial class MainWindow
                 if (ImGui.InputInt($"##q{row.ItemId}", ref qty, 0)) { row.Quantity = Math.Max(1, qty); Cfg.Save(); }
 
                 ImGui.TableNextColumn();
-                var max = (int)Math.Min(row.MaxPrice, int.MaxValue);
-                ImGui.SetNextItemWidth(-1);
-                if (ImGui.InputInt($"##m{row.ItemId}", ref max, 0)) { row.MaxPrice = Math.Max(1, max); Cfg.Save(); }
+                var useCap = row.UseMaxPrice;
+                if (ImGui.Checkbox($"##cap{row.ItemId}", ref useCap)) { row.UseMaxPrice = useCap; Cfg.Save(); }
+
+                ImGui.TableNextColumn();
+                using (ImRaiiDisabled(!row.UseMaxPrice))
+                {
+                    var max = (int)Math.Min(row.MaxPrice, int.MaxValue);
+                    ImGui.SetNextItemWidth(-1);
+                    if (ImGui.InputInt($"##m{row.ItemId}", ref max, 0)) { row.MaxPrice = Math.Max(1, max); Cfg.Save(); }
+                }
 
                 ImGui.TableNextColumn();
                 var hq = row.HqOnly;
@@ -153,9 +172,127 @@ public partial class MainWindow
         if (ImGui.Button("Clear list##buyclear", new Vector2(SW(120), 0)))
         {
             Cfg.BuyerItems.Clear();
+            Cfg.BuyerUnbuyable.Clear();
             Cfg.Save();
             _plugin.Buyer.ClearPlan();
         }
+
+        DrawUnbuyableReport();
+        DrawUncappedWarning();
+    }
+
+    // ---- MakePlace import ----------------------------------------------------------------------
+
+    private string _mpPaste = string.Empty;
+    private string _mpPath = string.Empty;
+    private bool _mpReplace = true;
+    private string _mpStatus = string.Empty;
+
+    private void DrawMakePlaceImport()
+    {
+        if (!ImGui.CollapsingHeader("Import a MakePlace shopping list")) return;
+
+        WrapText(Grey, "Reads the FURNITURE section only. Dyes are ignored, and so is \"Furniture (With Dye)\" — that section repeats the same furnishings split by colour, so importing it too would double every quantity.");
+        Dummy(4f);
+
+        ImGui.SetNextItemWidth(SW(320));
+        ImGui.InputTextWithHint("##mppath", "path to your .txt list", ref _mpPath, 512);
+        ImGui.SameLine(0, SW(6));
+        if (ImGui.Button("Load file##mpload", new Vector2(SW(90), 0)))
+        {
+            try
+            {
+                var path = _mpPath.Trim().Trim('"');
+                _mpPaste = System.IO.File.ReadAllText(path);
+                _mpStatus = $"Loaded {_mpPaste.Length:N0} characters.";
+            }
+            catch (Exception ex) { _mpStatus = $"Couldn't read that file: {ex.Message}"; }
+        }
+
+        Dummy(2f);
+        ImGui.TextColored(Grey, "...or paste the list here:");
+        ImGui.InputTextMultiline("##mppaste", ref _mpPaste, 200000, new Vector2(-1, SW(120)));
+
+        Dummy(2f);
+        if (ImGui.Checkbox("Replace the current shopping list", ref _mpReplace)) { }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("On: the list is wiped and rebuilt from the import. Off: imported quantities are added on top of what's already there.");
+
+        Dummy(2f);
+        using (ImRaiiDisabled(string.IsNullOrWhiteSpace(_mpPaste)))
+        {
+            if (ImGui.Button("Import furniture", new Vector2(SW(160), 0))) RunMakePlaceImport();
+        }
+        ImGui.SameLine(0, SW(6));
+        if (ImGui.Button("Clear##mpclear", new Vector2(SW(70), 0))) { _mpPaste = string.Empty; _mpStatus = string.Empty; }
+
+        if (!string.IsNullOrEmpty(_mpStatus))
+        {
+            Dummy(2f);
+            WrapText(Grey, _mpStatus);
+        }
+    }
+
+    private void RunMakePlaceImport()
+    {
+        var result = MakePlaceImport.ParseFurniture(_mpPaste);
+        if (result.Error != null) { _mpStatus = result.Error; return; }
+
+        if (_mpReplace) Cfg.BuyerItems.Clear();
+        Cfg.BuyerUnbuyable.Clear();
+
+        foreach (var entry in result.Items)
+        {
+            var existing = Cfg.BuyerItems.FirstOrDefault(i => i.ItemId == entry.ItemId);
+            if (existing != null)
+            {
+                existing.Quantity += entry.Quantity;
+                continue;
+            }
+            Cfg.BuyerItems.Add(new BuyerItem
+            {
+                ItemId = entry.ItemId,
+                Quantity = entry.Quantity,
+                UseMaxPrice = Cfg.BuyerNewItemUseMaxPrice,
+                MaxPrice = Math.Max(1, _buyerAddMax),
+            });
+        }
+
+        Cfg.BuyerUnbuyable.AddRange(result.Unbuyable);
+        Cfg.Save();
+        _plugin.Buyer.ClearPlan();
+
+        _mpStatus = result.Unbuyable.Count == 0
+            ? $"Imported {result.Items.Count} item type(s), {result.TotalUnits:N0} unit(s) in total."
+            : $"Imported {result.Items.Count} item type(s), {result.TotalUnits:N0} unit(s). {result.Unbuyable.Count} line(s) can't be bought — listed below.";
+    }
+
+    private void DrawUnbuyableReport()
+    {
+        if (Cfg.BuyerUnbuyable.Count == 0) return;
+
+        Dummy(4f);
+        ImGui.TextColored(Red, $"Can't be bought ({Cfg.BuyerUnbuyable.Count}):");
+        if (ImGui.BeginChild("##unbuyable", new Vector2(0, SW(90)), true))
+        {
+            foreach (var line in Cfg.BuyerUnbuyable)
+                WrapText(Red, line);
+        }
+        ImGui.EndChild();
+        if (ImGui.Button("Dismiss##unbuyclear", new Vector2(SW(100), 0))) { Cfg.BuyerUnbuyable.Clear(); Cfg.Save(); }
+    }
+
+    /// <summary>
+    /// With caps off, "cheapest available" can still be an expensive listing. The wallet guards
+    /// are the real protection, so point at them rather than silently relying on them.
+    /// </summary>
+    private void DrawUncappedWarning()
+    {
+        var uncapped = Cfg.BuyerItems.Count(i => i.Enabled && !i.UseMaxPrice);
+        if (uncapped == 0 || Cfg.BuyerMaxSpendPerRun > 0) return;
+
+        Dummy(4f);
+        WrapText(Gold, $"{uncapped} item(s) have no price cap and there's no per-run spend limit set. The Buyer will take the cheapest listings it finds whatever they cost — consider setting \"Max spend per run\" in Buyer settings.");
     }
 
     // ---- scan scope ---------------------------------------------------------------------------
