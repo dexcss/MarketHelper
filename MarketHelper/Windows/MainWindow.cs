@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
 using MarketHelper;
@@ -17,6 +18,10 @@ public partial class MainWindow : Window
 {
     private readonly Plugin _plugin;
     private Configuration Cfg => _plugin.Config;
+
+    /// <summary>Shared file-picker host. Must be drawn every frame, outside the tab bar, or the
+    /// dialog vanishes the moment you switch tabs while it's open.</summary>
+    private readonly FileDialogManager _fileDialog = new();
 
     public MainWindow(Plugin plugin)
         : base("Market Helper##Main", ImGuiWindowFlags.None)
@@ -63,6 +68,8 @@ public partial class MainWindow : Window
             }
             ImGui.EndTabBar();
         }
+
+        _fileDialog.Draw();
     }
 
     /// <summary>The Undercut tab: the run section plus its sub-tabs (Settings/Overrides/etc).</summary>

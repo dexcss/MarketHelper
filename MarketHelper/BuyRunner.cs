@@ -814,8 +814,63 @@ public sealed class BuyRunner
     private static string Trim(string s)
         => s.Length <= 160 ? s : s[..160] + "...";
 
+    /// <summary>
+    /// Rewrite the shopping list to match reality after a REAL run.
+    ///
+    /// Partly filled rows have what was bought deducted, so a row that wanted 4 Bar Racks and got
+    /// 3 comes back wanting 1 — run again later and it buys the remainder, not another four.
+    /// Fully filled rows are unticked instead (quantity left intact as a record of the order).
+    ///
+    /// Never runs on a dry run: nothing was bought, so editing the list would be a lie. Saves
+    /// ONCE at the end rather than per purchase, because config writes hit SQLite.
+    /// </summary>
+    private void UpdateListAfterRun()
+    {
+        if (DryRun || !Cfg.BuyerAutoDisableCompleted) return;
+
+        var finished = new List<string>();
+        var reduced = new List<string>();
+
+        foreach (var row in Cfg.BuyerItems)
+        {
+            if (!row.Enabled || row.ItemId == 0) continue;
+            var got = BoughtFor(row.ItemId);
+            if (got <= 0) continue;
+
+            var name = ItemSearch.FindById(row.ItemId);
+            if (string.IsNullOrEmpty(name)) name = $"#{row.ItemId}";
+
+            if (got >= row.Quantity)
+            {
+                row.Enabled = false;
+                finished.Add(name);
+            }
+            else
+            {
+                var remaining = row.Quantity - got;
+                row.Quantity = remaining;
+                reduced.Add($"{name} x{remaining}");
+            }
+        }
+
+        if (finished.Count == 0 && reduced.Count == 0) return;
+        Cfg.Save();
+
+        if (finished.Count > 0)
+            Log(finished.Count <= 6
+                ? $"Order filled, unticked: {string.Join(", ", finished)}."
+                : $"Order filled for {finished.Count} item(s) — unticked on the shopping list.");
+
+        if (reduced.Count > 0)
+            Log(reduced.Count <= 6
+                ? $"Still to buy: {string.Join(", ", reduced)}."
+                : $"{reduced.Count} item(s) partly filled — the list now shows what's left.");
+    }
+
     private void Finish()
     {
+        UpdateListAfterRun();
+
         if (Cfg.BuyerReturnHome && !DryRun) { State = BuyState.ReturnHome; return; }
         State = BuyState.Done;
         Status = Summary();

@@ -121,6 +121,9 @@ public sealed class Buyer
         public Dictionary<uint, string> Names = new();
         public int DelayMs;
         public int CheapestCount;
+        public int Depth;
+        public bool DcPriority;
+        public List<string> DcOrder = new();
 
         public string ScopeLabel => Locations.Count == 0
             ? "(nothing selected)"
@@ -188,6 +191,9 @@ public sealed class Buyer
                 LifestreamPresent = LifestreamBridge.Available,
                 DelayMs = Math.Clamp(Cfg.BuyerScanDelayMs, 0, 2000),
                 CheapestCount = Math.Clamp(Cfg.BuyerShowCheapestCount, 0, 25),
+                Depth = Math.Clamp(Cfg.BuyerListingDepth, 20, 500),
+                DcPriority = Cfg.BuyerDcPriorityEnabled,
+                DcOrder = Cfg.BuyerDcPriority.Where(d => !string.IsNullOrWhiteSpace(d)).Select(d => d.Trim()).ToList(),
                 WorldToDc = WorldInfo.WorldToDataCenter(),
                 MyRetainers = new HashSet<string>(
                     Cfg.MyRetainers.Where(n => !string.IsNullOrWhiteSpace(n)).Select(Normalise)),
@@ -262,7 +268,7 @@ public sealed class Buyer
                 // endpoint, so in Custom mode the DC list you chose is exactly what gets queried:
                 // nothing wider, nothing you didn't tick.
                 var tasks = ctx.Locations
-                    .Select(loc => (Location: loc, Task: Universalis.GetListingsAsync(loc, item.ItemId, 100, item.HqOnly)))
+                    .Select(loc => (Location: loc, Task: Universalis.GetListingsAsync(loc, item.ItemId, ctx.Depth, item.HqOnly)))
                     .ToList();
                 await Task.WhenAll(tasks.Select(t => t.Task));
 
@@ -365,30 +371,52 @@ public sealed class Buyer
                 else if (!summary.AnyListingsAtAll)
                     result.Warnings.Add($"{name}: no listings on {ctx.ScopeLabel}.");
                 else if (!summary.Satisfied)
-                    result.Warnings.Add($"{name}: only {summary.FoundUnits} of {summary.Requested} available under cap.");
+                    result.Warnings.Add(summary.Capped
+                        ? $"{name}: only {summary.FoundUnits} of {summary.Requested} available under cap."
+                        : $"{name}: only {summary.FoundUnits} of {summary.Requested} listed anywhere in {ctx.ScopeLabel}.");
 
                 result.Items.Add(summary);
             }
 
-            // Visit order, cheapest-travel first:
-            //   1. the world we're already standing on (free),
-            //   2. the rest of our current DC (a plain world visit),
-            //   3. other DCs, each visited contiguously so we pay ONE data-center transfer per DC,
-            //      richest DC first, and richest world first inside each.
             var dcValue = byWorld.Values
                 .GroupBy(w => w.DataCenter, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.Sum(w => w.TotalCost), StringComparer.OrdinalIgnoreCase);
 
-            foreach (var stop in byWorld.Values
-                         .OrderByDescending(w => string.Equals(w.World, ctx.CurrentWorld, StringComparison.OrdinalIgnoreCase))
-                         .ThenByDescending(w => string.Equals(w.DataCenter, ctx.CurrentDataCenter, StringComparison.OrdinalIgnoreCase))
-                         .ThenByDescending(w => dcValue.TryGetValue(w.DataCenter, out var v) ? v : 0)
-                         .ThenBy(w => w.DataCenter, StringComparer.OrdinalIgnoreCase)
-                         .ThenByDescending(w => w.TotalCost))
+            IEnumerable<WorldStop> ordered;
+            if (ctx.DcPriority && ctx.DcOrder.Count > 0)
+            {
+                // Strict data-center order. Every world on the first DC is cleared before moving
+                // to the second, so the whole run costs one transfer per DC. The trade-off is
+                // real: if your bags fill early you'll have bought whatever the first DC had,
+                // not the most valuable listings overall.
+                ordered = byWorld.Values
+                    .OrderBy(w => DcRank(ctx, w.DataCenter))
+                    .ThenByDescending(w => string.Equals(w.World, ctx.CurrentWorld, StringComparison.OrdinalIgnoreCase))
+                    .ThenByDescending(w => w.TotalCost);
+            }
+            else
+            {
+                // Default: cheapest travel first —
+                //   1. the world we're already standing on (free),
+                //   2. the rest of our current DC (a plain world visit),
+                //   3. other DCs, each visited contiguously so we pay ONE transfer per DC,
+                //      richest DC first, and richest world first inside each.
+                ordered = byWorld.Values
+                    .OrderByDescending(w => string.Equals(w.World, ctx.CurrentWorld, StringComparison.OrdinalIgnoreCase))
+                    .ThenByDescending(w => string.Equals(w.DataCenter, ctx.CurrentDataCenter, StringComparison.OrdinalIgnoreCase))
+                    .ThenByDescending(w => dcValue.TryGetValue(w.DataCenter, out var v) ? v : 0)
+                    .ThenBy(w => w.DataCenter, StringComparer.OrdinalIgnoreCase)
+                    .ThenByDescending(w => w.TotalCost);
+            }
+
+            foreach (var stop in ordered)
             {
                 stop.Lines.Sort((a, b) => a.UnitPrice.CompareTo(b.UnitPrice));
                 result.Stops.Add(stop);
             }
+
+            if (ctx.DcPriority && ctx.DcOrder.Count > 0)
+                result.Warnings.Add($"Data-center order is fixed: {string.Join(" -> ", ctx.DcOrder)}. Stops follow that order rather than value.");
 
             if (result.Stops.Count > 1 && !ctx.LifestreamPresent)
                 result.Warnings.Add("Lifestream isn't loaded — world hops will be skipped; only the world you're on can be bought from.");
@@ -416,6 +444,15 @@ public sealed class Buyer
         {
             Scanning = false;
         }
+    }
+
+    /// <summary>Position of a DC in the user's priority list; anything unlisted sorts last.</summary>
+    private static int DcRank(ScanContext ctx, string dc)
+    {
+        if (string.IsNullOrWhiteSpace(dc)) return int.MaxValue;
+        for (var i = 0; i < ctx.DcOrder.Count; i++)
+            if (string.Equals(ctx.DcOrder[i], dc, StringComparison.OrdinalIgnoreCase)) return i;
+        return int.MaxValue;
     }
 
     private static string DcOf(ScanContext ctx, string world)

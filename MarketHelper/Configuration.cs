@@ -178,6 +178,20 @@ public class Configuration : IPluginConfiguration
     // This is what answers "nothing at 1,000g — so what DOES it cost?". 0 hides the section.
     public int BuyerShowCheapestCount { get; set; } = 5;
 
+    // How many listings to pull per world per item. 100 is plenty for most things, but a deep
+    // market (91 dining tables) can be truncated by it — raise if "Found" comes back short.
+    public int BuyerListingDepth { get; set; } = 100;
+
+    // After a real run, rewrite the shopping list to match what's actually left: deduct what was
+    // bought from each row's quantity, and untick rows whose order is complete. Stops a second
+    // SEND from re-buying everything.
+    public bool BuyerAutoDisableCompleted { get; set; } = true;
+
+    // Visit whole data centers in a fixed order instead of chasing the most valuable stop first.
+    // Off by default — it trades "bank the biggest wins early" for "fewer DC transfers".
+    public bool BuyerDcPriorityEnabled { get; set; } = false;
+    public List<string> BuyerDcPriority { get; set; } = new();
+
     // Politeness gap between Universalis calls when scanning several DCs at once.
     public int BuyerScanDelayMs { get; set; } = 120;
 

@@ -184,7 +184,8 @@ public partial class MainWindow
     // ---- MakePlace import ----------------------------------------------------------------------
 
     private string _mpPaste = string.Empty;
-    private string _mpPath = string.Empty;
+    private string _mpLastDir = string.Empty;
+    private string _mpLoadedName = string.Empty;
     private bool _mpReplace = true;
     private string _mpStatus = string.Empty;
 
@@ -195,19 +196,21 @@ public partial class MainWindow
         WrapText(Grey, "Reads the FURNITURE section only. Dyes are ignored, and so is \"Furniture (With Dye)\" — that section repeats the same furnishings split by colour, so importing it too would double every quantity.");
         Dummy(4f);
 
-        ImGui.SetNextItemWidth(SW(320));
-        ImGui.InputTextWithHint("##mppath", "path to your .txt list", ref _mpPath, 512);
-        ImGui.SameLine(0, SW(6));
-        if (ImGui.Button("Load file##mpload", new Vector2(SW(90), 0)))
+        if (ImGui.Button("Choose file...##mpbrowse", new Vector2(SW(140), 0)))
         {
-            try
-            {
-                var path = _mpPath.Trim().Trim('"');
-                _mpPaste = System.IO.File.ReadAllText(path);
-                _mpStatus = $"Loaded {_mpPaste.Length:N0} characters.";
-            }
-            catch (Exception ex) { _mpStatus = $"Couldn't read that file: {ex.Message}"; }
+            _fileDialog.OpenFileDialog(
+                "Select a MakePlace shopping list",
+                "Text files{.txt},All files{.*}",
+                (ok, paths) =>
+                {
+                    if (!ok || paths.Count == 0) return;
+                    LoadMakePlaceFile(paths[0]);
+                },
+                1,
+                string.IsNullOrWhiteSpace(_mpLastDir) ? null : _mpLastDir);
         }
+        ImGui.SameLine(0, SW(8));
+        ImGui.TextColored(Grey, string.IsNullOrEmpty(_mpLoadedName) ? "no file loaded" : _mpLoadedName);
 
         Dummy(2f);
         ImGui.TextColored(Grey, "...or paste the list here:");
@@ -224,12 +227,28 @@ public partial class MainWindow
             if (ImGui.Button("Import furniture", new Vector2(SW(160), 0))) RunMakePlaceImport();
         }
         ImGui.SameLine(0, SW(6));
-        if (ImGui.Button("Clear##mpclear", new Vector2(SW(70), 0))) { _mpPaste = string.Empty; _mpStatus = string.Empty; }
+        if (ImGui.Button("Clear##mpclear", new Vector2(SW(70), 0)))
+        { _mpPaste = string.Empty; _mpStatus = string.Empty; _mpLoadedName = string.Empty; }
 
         if (!string.IsNullOrEmpty(_mpStatus))
         {
             Dummy(2f);
             WrapText(Grey, _mpStatus);
+        }
+    }
+
+    private void LoadMakePlaceFile(string path)
+    {
+        try
+        {
+            _mpPaste = System.IO.File.ReadAllText(path);
+            _mpLoadedName = System.IO.Path.GetFileName(path);
+            _mpLastDir = System.IO.Path.GetDirectoryName(path) ?? string.Empty;
+            _mpStatus = $"Loaded {_mpLoadedName} ({_mpPaste.Length:N0} characters). Press Import furniture.";
+        }
+        catch (Exception ex)
+        {
+            _mpStatus = $"Couldn't read that file: {ex.Message}";
         }
     }
 
@@ -388,10 +407,73 @@ public partial class MainWindow
             }
         }
 
+        Dummy(4f);
+        DrawDcPriority();
+
         var label = string.Join(", ", _plugin.Buyer.ResolveLocations());
         WrapText(Grey, $"Will scan: {(string.IsNullOrWhiteSpace(label) ? "(nothing)" : label)}");
         if (Cfg.BuyerExcludedWorlds.Count > 0)
             WrapText(Grey, $"Skipping {Cfg.BuyerExcludedWorlds.Count} world(s): {string.Join(", ", Cfg.BuyerExcludedWorlds)}");
+    }
+
+    /// <summary>
+    /// Optional strict data-center visit order. Off by default because it changes what you end up
+    /// with if a run stops early — see the warning text below.
+    /// </summary>
+    private void DrawDcPriority()
+    {
+        var on = Cfg.BuyerDcPriorityEnabled;
+        if (ImGui.Checkbox("Visit data centers in a fixed order", ref on))
+        {
+            Cfg.BuyerDcPriorityEnabled = on;
+            if (on && Cfg.BuyerDcPriority.Count == 0)
+                Cfg.BuyerDcPriority = WorldInfo.DataCentersInRegion(WorldInfo.CurrentRegionId());
+            Cfg.Save();
+        }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Off: the richest stop is visited first, so an interrupted run has banked the most value. On: whole data centers are cleared in the order below, which means one transfer per DC instead of bouncing between them.");
+
+        if (!on) return;
+
+        // Seed from the region if the list is empty or the character moved region.
+        var regionDcs = WorldInfo.DataCentersInRegion(WorldInfo.CurrentRegionId());
+        foreach (var dc in regionDcs)
+            if (!Cfg.BuyerDcPriority.Contains(dc, StringComparer.OrdinalIgnoreCase))
+            { Cfg.BuyerDcPriority.Add(dc); Cfg.Save(); }
+
+        Dummy(2f);
+        ImGui.TextColored(Grey, "Order (top first):");
+
+        int? moveUp = null, moveDown = null;
+        for (var i = 0; i < Cfg.BuyerDcPriority.Count; i++)
+        {
+            var dc = Cfg.BuyerDcPriority[i];
+            using (ImRaiiDisabled(i == 0))
+            {
+                if (ImGui.SmallButton($"^##up{dc}")) moveUp = i;
+            }
+            ImGui.SameLine(0, SW(3));
+            using (ImRaiiDisabled(i == Cfg.BuyerDcPriority.Count - 1))
+            {
+                if (ImGui.SmallButton($"v##down{dc}")) moveDown = i;
+            }
+            ImGui.SameLine(0, SW(8));
+            ImGui.TextUnformatted($"{i + 1}. {dc}");
+        }
+
+        if (moveUp is int u && u > 0)
+        {
+            (Cfg.BuyerDcPriority[u - 1], Cfg.BuyerDcPriority[u]) = (Cfg.BuyerDcPriority[u], Cfg.BuyerDcPriority[u - 1]);
+            Cfg.Save();
+        }
+        if (moveDown is int d && d < Cfg.BuyerDcPriority.Count - 1)
+        {
+            (Cfg.BuyerDcPriority[d + 1], Cfg.BuyerDcPriority[d]) = (Cfg.BuyerDcPriority[d], Cfg.BuyerDcPriority[d + 1]);
+            Cfg.Save();
+        }
+
+        Dummy(2f);
+        WrapText(Gold, "Prices don't change — the plan still picks the same cheapest listings. What changes is the order you collect them in, so if your bags fill or you stop early you'll have whatever the first data centers held rather than the most valuable listings.");
     }
 
     /// <summary>Per-world include/exclude checkboxes for one data center.</summary>
@@ -492,6 +574,17 @@ public partial class MainWindow
         if (ImGui.InputInt("Cheapest listings to show (0 = off)", ref cheapest, 1)) { Cfg.BuyerShowCheapestCount = Math.Clamp(cheapest, 0, 25); Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
         HelpMarker("Per item, the plan lists this many of the cheapest listings in scope even when they're above your max price — so \"none at 1,000g\" also tells you what it actually costs and where.");
+
+        var depth = Cfg.BuyerListingDepth;
+        ImGui.SetNextItemWidth(SW(180));
+        if (ImGui.InputInt("Listings to fetch per world", ref depth, 20)) { Cfg.BuyerListingDepth = Math.Clamp(depth, 20, 500); Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("How deep to read each world's listings. Raise it if \"Found\" comes back short for an item you know has plenty listed — a deep market can be truncated at 100.");
+
+        var autoOff = Cfg.BuyerAutoDisableCompleted;
+        if (ImGui.Checkbox("Update the shopping list after a run", ref autoOff)) { Cfg.BuyerAutoDisableCompleted = autoOff; Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("After a REAL run the list is rewritten to match what's left: partly filled rows have what you bought deducted (wanted 4, got 3 -> now wants 1), and fully filled rows are unticked. Dry runs never change the list.");
 
         var delay = Cfg.BuyerScanDelayMs;
         ImGui.SetNextItemWidth(SW(180));
