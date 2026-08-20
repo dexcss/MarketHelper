@@ -70,7 +70,7 @@ public sealed class BuyPlanWindow : Window
         ImGui.SameLine(0, SW(8));
         using (Disabled(runner.Running || !plan.HasWork))
         {
-            if (ImGui.Button(Cfg.BuyerDryRun ? "SEND (dry run)" : "SEND", new Vector2(SW(160), 0)))
+            if (ImGui.Button("SEND", new Vector2(SW(160), 0)))
                 runner.Start(plan, Cfg.BuyerDryRun);
         }
         if (runner.Running)
@@ -79,7 +79,7 @@ public sealed class BuyPlanWindow : Window
             if (ImGui.Button("Stop", new Vector2(SW(80), 0))) runner.Stop();
         }
         ImGui.SameLine(0, SW(8));
-        ImGui.TextColored(Cfg.BuyerDryRun ? Blue : Gold, Cfg.BuyerDryRun ? "dry run ON" : "LIVE — will spend gil");
+        ImGui.TextColored(Cfg.BuyerDryRun ? Blue : Gold, Cfg.BuyerDryRun ? "dry run" : "LIVE — will spend gil");
 
         if (runner.Running || runner.State == BuyState.Error || runner.State == BuyState.Done)
         {
@@ -147,13 +147,37 @@ public sealed class BuyPlanWindow : Window
         ImGui.EndTable();
 
         Dummy(6f);
-        ImGui.TextColored(Grey, "Availability per world (at or under your cap):");
         foreach (var it in plan.Items)
         {
-            if (it.PerWorld.Count == 0) continue;
-            ImGui.TextUnformatted($"{it.ItemName}:");
-            foreach (var kv in it.PerWorld)
-                ImGui.TextColored(Grey, $"    {kv.Key} — {kv.Value.Units} available from {kv.Value.Cheapest:N0}g");
+            if (it.PerWorld.Count == 0 && it.Cheapest.Count == 0) continue;
+
+            if (!ImGui.CollapsingHeader($"{it.ItemName}##detail{it.ItemId}", ImGuiTreeNodeFlags.DefaultOpen))
+                continue;
+
+            if (it.PerWorld.Count > 0)
+            {
+                ImGui.TextColored(Grey, $"Available at or under {it.MaxPrice:N0}g:");
+                foreach (var kv in it.PerWorld)
+                    ImGui.TextColored(Green, $"    {kv.Key} — {kv.Value.Units} available from {kv.Value.Cheapest:N0}g");
+            }
+            else if (it.AnyListingsAtAll)
+            {
+                ImGui.TextColored(Red, $"    None available at {it.MaxPrice:N0}g.");
+            }
+
+            if (it.Cheapest.Count > 0)
+            {
+                Dummy(2f);
+                ImGui.TextColored(Grey, $"Cheapest {it.Cheapest.Count} in scope (regardless of your cap):");
+                foreach (var c in it.Cheapest)
+                {
+                    var underCap = c.UnitPrice <= it.MaxPrice;
+                    var dcTag = string.IsNullOrWhiteSpace(c.DataCenter) ? "" : $" [{c.DataCenter}]";
+                    ImGui.TextColored(underCap ? Green : Grey,
+                        $"    {c.UnitPrice:N0}g  x{c.Quantity}{(c.Hq ? " HQ" : "")}  —  {c.World}{dcTag}{(underCap ? "" : "  (over cap)")}");
+                }
+            }
+            Dummy(4f);
         }
     }
 

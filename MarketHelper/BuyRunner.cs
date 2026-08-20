@@ -8,7 +8,7 @@ namespace MarketHelper;
 public enum BuyState
 {
     Idle, NextStop, Travel, WaitTravel, FindBoard, WalkBoard, InteractBoard, WaitBoard,
-    NextItem, Search, WaitResults, SelectRow, WaitListings, PickListing,
+    NextItem, Search, WaitResults, WaitManualSearch, SelectRow, WaitListings, PickListing,
     WaitConfirm, WaitPurchase, CloseBoard, ReturnHome, WaitReturn, Done, Error,
 }
 
@@ -54,6 +54,7 @@ public sealed class BuyRunner
     private double _deadline;
     private int _ticks;
     private int _buysThisItem;
+    private int _searchAttempt;
     private long _gilAtStart;
     private long _expectedTotal;
     private int _expectedQty;
@@ -289,13 +290,12 @@ public sealed class BuyRunner
             {
                 if (!MarketBoard.BoardOpen) { State = BuyState.FindBoard; return; }
                 Status = $"Searching for {_itemName}...";
-                if (!MarketBoard.Search(_itemName))
-                {
-                    Log($"Couldn't drive the search box for {_itemName} — skipping.");
-                    State = BuyState.NextItem;
-                    return;
-                }
+                var detail = MarketBoard.Search(_itemName, Cfg.BuyerPartialMatch);
+                if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: search -> {detail}");
+                if (detail.Contains("FAILED", StringComparison.Ordinal))
+                    Log($"{_itemName}: search step reported a problem — {detail}");
                 _ticks = 0;
+                _searchAttempt = 0;
                 Wait(Math.Max(600, Cfg.SearchPacingMs));
                 State = BuyState.WaitResults;
                 return;
@@ -303,6 +303,15 @@ public sealed class BuyRunner
 
             case BuyState.WaitResults:
             {
+                // The user may have driven the board themselves — if listings for our item are
+                // already up, skip straight past the result list.
+                if (MarketBoard.ListingsReadyFor(_item))
+                {
+                    _ticks = 0;
+                    State = BuyState.PickListing;
+                    return;
+                }
+
                 var row = MarketBoard.FindResultRow(_item);
                 if (row >= 0)
                 {
@@ -313,13 +322,88 @@ public sealed class BuyRunner
                     State = BuyState.WaitListings;
                     return;
                 }
-                if (++_ticks > 30)
+
+                // Retry ladder. Typing the name is reliable; making the game ACT on it is the part
+                // that can silently no-op, so escalate through the ways of firing the search
+                // before giving up on the item.
+                _ticks++;
+                if (_ticks == 6 && _searchAttempt == 0)
                 {
+                    _searchAttempt = 1;
+                    var d = MarketBoard.RunSearchOnly(false);
+                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: retry 1 -> {d}");
+                    Wait(400);
+                    return;
+                }
+                if (_ticks == 14 && _searchAttempt == 1)
+                {
+                    _searchAttempt = 2;
+                    var d = MarketBoard.Search(_itemName, Cfg.BuyerPartialMatch);
+                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: retry 2 (retype) -> {d}");
+                    Wait(400);
+                    return;
+                }
+                if (_ticks == 24 && _searchAttempt == 2)
+                {
+                    _searchAttempt = 3;
+                    var d = MarketBoard.PressSearchButton(Cfg.BuyerSearchButtonOpcode);
+                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: retry 3 -> {d}");
+                    Wait(400);
+                    return;
+                }
+
+                if (_ticks > 34)
+                {
+                    if (Cfg.BuyerManualSearchFallback)
+                    {
+                        Log($"{_itemName}: couldn't fire the board search. Search it yourself and open the listings — I'll carry on from there. (Stop to cancel.)");
+                        _ticks = 0;
+                        State = BuyState.WaitManualSearch;
+                        Wait(500);
+                        return;
+                    }
                     Log($"{_itemName}: no search result on this board — skipping.");
                     State = BuyState.NextItem;
                     return;
                 }
                 Wait(300);
+                return;
+            }
+
+            case BuyState.WaitManualSearch:
+            {
+                if (!MarketBoard.BoardOpen && !MarketBoard.ResultsOpen)
+                {
+                    Log($"{_itemName}: board closed while waiting — skipping.");
+                    State = BuyState.NextItem;
+                    return;
+                }
+                if (MarketBoard.ListingsReadyFor(_item))
+                {
+                    Log($"{_itemName}: listings are up — carrying on.");
+                    _ticks = 0;
+                    State = BuyState.PickListing;
+                    return;
+                }
+                var manualRow = MarketBoard.FindResultRow(_item);
+                if (manualRow >= 0)
+                {
+                    MarketBoard.SelectResultRow(manualRow, Cfg.BuyerSelectResultOpcode);
+                    _ticks = 0;
+                    Wait(700);
+                    State = BuyState.WaitListings;
+                    return;
+                }
+
+                var limitTicks = Math.Max(10, Cfg.BuyerManualSearchTimeoutSec * 2);
+                Status = $"Waiting for you to search {_itemName} ({(limitTicks - _ticks) / 2}s)...";
+                if (++_ticks > limitTicks)
+                {
+                    Log($"{_itemName}: gave up waiting for a manual search — skipping.");
+                    State = BuyState.NextItem;
+                    return;
+                }
+                Wait(500);
                 return;
             }
 

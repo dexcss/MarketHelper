@@ -16,7 +16,7 @@ public partial class MainWindow
 
     private void DrawBuyerTab()
     {
-        WrapText("Build a shopping list, press SCAN to find the cheapest listings across your data center, then press SEND to go and buy them. Nothing is ever bought above the max price you set for that item.");
+        WrapText("Build a shopping list, press SCAN to find the cheapest listings in your chosen scope, then press SEND to go and buy them. Nothing is ever bought above the max price you set for that item.");
         Dummy(6f);
 
         DrawBuyerAddRow();
@@ -305,10 +305,15 @@ public partial class MainWindow
         var plan = buyer.Plan;
         using (ImRaiiDisabled(runner.Running || plan == null || !plan.HasWork))
         {
-            if (ImGui.Button(Cfg.BuyerDryRun ? "SEND (dry run)" : "SEND", new Vector2(SW(160), SW(30))))
+            if (ImGui.Button("SEND", new Vector2(SW(160), SW(30))))
             {
                 if (plan != null) runner.Start(plan, Cfg.BuyerDryRun);
             }
+        }
+        if (!Cfg.BuyerDryRun)
+        {
+            ImGui.SameLine(0, SW(10));
+            ImGui.TextColored(Gold, "LIVE — will spend gil");
         }
         if (runner.Running)
         {
@@ -345,6 +350,12 @@ public partial class MainWindow
     {
         if (!ImGui.CollapsingHeader("Buyer settings")) return;
 
+        var cheapest = Cfg.BuyerShowCheapestCount;
+        ImGui.SetNextItemWidth(SW(180));
+        if (ImGui.InputInt("Cheapest listings to show (0 = off)", ref cheapest, 1)) { Cfg.BuyerShowCheapestCount = Math.Clamp(cheapest, 0, 25); Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Per item, the plan lists this many of the cheapest listings in scope even when they're above your max price — so \"none at 1,000g\" also tells you what it actually costs and where.");
+
         var delay = Cfg.BuyerScanDelayMs;
         ImGui.SetNextItemWidth(SW(180));
         if (ImGui.InputInt("Gap between Universalis calls (ms)", ref delay, 20)) { Cfg.BuyerScanDelayMs = Math.Clamp(delay, 0, 2000); Cfg.Save(); }
@@ -378,6 +389,20 @@ public partial class MainWindow
         var nav = Cfg.BuyerUseNavmesh;
         if (ImGui.Checkbox("Let vnavmesh walk me to the market board", ref nav)) { Cfg.BuyerUseNavmesh = nav; Cfg.Save(); }
 
+        var partial = Cfg.BuyerPartialMatch;
+        if (ImGui.Checkbox("Use the board's Partial Match when searching", ref partial)) { Cfg.BuyerPartialMatch = partial; Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("On by default. Exact-name matching is fussier about punctuation and localisation than it looks; partial match finds the item and we still pick the row by item ID, so it can't grab the wrong thing.");
+
+        var manual = Cfg.BuyerManualSearchFallback;
+        if (ImGui.Checkbox("If the search won't fire, let me do it by hand", ref manual)) { Cfg.BuyerManualSearchFallback = manual; Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Rather than skipping the item, the run pauses and waits for you to search it on the board yourself. As soon as the listings are up it carries on automatically.");
+
+        var manualWait = Cfg.BuyerManualSearchTimeoutSec;
+        ImGui.SetNextItemWidth(SW(180));
+        if (ImGui.InputInt("Seconds to wait for a manual search", ref manualWait, 10)) { Cfg.BuyerManualSearchTimeoutSec = Math.Clamp(manualWait, 5, 600); Cfg.Save(); }
+
         var boardName = Cfg.BuyerBoardNameOverride;
         ImGui.SetNextItemWidth(SW(180));
         if (ImGui.InputTextWithHint("Board object name", "blank = auto (EN/JP/DE/FR)", ref boardName, 60)) { Cfg.BuyerBoardNameOverride = boardName; Cfg.Save(); }
@@ -392,6 +417,9 @@ public partial class MainWindow
             var buy = Cfg.BuyerBuyOpcode;
             ImGui.SetNextItemWidth(SW(120));
             if (ImGui.InputInt("Click a listing", ref buy, 1)) { Cfg.BuyerBuyOpcode = buy; Cfg.Save(); }
+            var searchBtn = Cfg.BuyerSearchButtonOpcode;
+            ImGui.SetNextItemWidth(SW(120));
+            if (ImGui.InputInt("Search button (fallback)", ref searchBtn, 1)) { Cfg.BuyerSearchButtonOpcode = searchBtn; Cfg.Save(); }
             ImGui.TreePop();
         }
     }

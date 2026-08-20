@@ -32,6 +32,17 @@ public sealed class WorldStop
     public int ItemTypes => Lines.Select(l => l.ItemId).Distinct().Count();
 }
 
+/// <summary>A single cheapest-listing entry, shown regardless of whether it clears the cap.</summary>
+public sealed class CheapestListing
+{
+    public string World = string.Empty;
+    public string DataCenter = string.Empty;
+    public string Seller = string.Empty;
+    public long UnitPrice;
+    public int Quantity;
+    public bool Hq;
+}
+
 /// <summary>Per-item view of a scan: what we wanted vs what's actually available under the cap.</summary>
 public sealed class ItemSummary
 {
@@ -45,6 +56,12 @@ public sealed class ItemSummary
     public long MaxPrice;
     public bool AnyListingsAtAll;
     public readonly Dictionary<string, (int Units, long Cheapest)> PerWorld = new();
+
+    /// <summary>
+    /// The N cheapest listings in scope, INCLUDING ones above your cap. This is what tells you
+    /// "nothing at 1,000g, but here's what it actually costs" instead of just reporting nothing.
+    /// </summary>
+    public readonly List<CheapestListing> Cheapest = new();
 
     public bool Satisfied => FoundUnits >= Requested;
     public bool NothingUnderCap => AnyListingsAtAll && FoundUnits == 0;
@@ -101,6 +118,7 @@ public sealed class Buyer
         public Dictionary<string, string> WorldToDc = new();
         public Dictionary<uint, string> Names = new();
         public int DelayMs;
+        public int CheapestCount;
 
         public string ScopeLabel => Locations.Count == 0
             ? "(nothing selected)"
@@ -167,6 +185,7 @@ public sealed class Buyer
                 CurrentDataCenter = WorldInfo.CurrentDataCenter(),
                 LifestreamPresent = LifestreamBridge.Available,
                 DelayMs = Math.Clamp(Cfg.BuyerScanDelayMs, 0, 2000),
+                CheapestCount = Math.Clamp(Cfg.BuyerShowCheapestCount, 0, 25),
                 WorldToDc = WorldInfo.WorldToDataCenter(),
                 MyRetainers = new HashSet<string>(
                     Cfg.MyRetainers.Where(n => !string.IsNullOrWhiteSpace(n)).Select(Normalise)),
@@ -282,6 +301,19 @@ public sealed class Buyer
                     summary.CheapestPrice = listings[0].PricePerUnit;
                     summary.CheapestWorld = listings[0].World;
                     summary.CheapestDataCenter = DcOf(ctx, listings[0].World);
+
+                    // Captured BEFORE the cap filter below, deliberately — the whole point is to
+                    // show real prices when nothing clears the cap.
+                    foreach (var l in listings.Take(ctx.CheapestCount))
+                        summary.Cheapest.Add(new CheapestListing
+                        {
+                            World = l.World,
+                            DataCenter = DcOf(ctx, l.World),
+                            Seller = l.Retainer,
+                            UnitPrice = l.PricePerUnit,
+                            Quantity = l.Quantity,
+                            Hq = l.Hq,
+                        });
                 }
 
                 var remaining = item.Quantity;
@@ -324,7 +356,7 @@ public sealed class Buyer
                 }
 
                 if (summary.NothingUnderCap)
-                    result.Warnings.Add($"{name}: nothing at or under {item.MaxPrice:N0}g (cheapest is {summary.CheapestPrice:N0}g on {summary.CheapestWorld}).");
+                    result.Warnings.Add($"{name}: none available at {item.MaxPrice:N0}g — cheapest is {summary.CheapestPrice:N0}g on {summary.CheapestWorld}. See the cheapest listings under \"By item\".");
                 else if (!summary.AnyListingsAtAll)
                     result.Warnings.Add($"{name}: no listings on {ctx.ScopeLabel}.");
                 else if (!summary.Satisfied)

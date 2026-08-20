@@ -158,6 +158,10 @@ public class Configuration : IPluginConfiguration
     // travel to them — useful only for looking at prices.
     public bool BuyerShowAllRegions { get; set; } = false;
 
+    // How many of the cheapest listings to show per item in the plan, regardless of your cap.
+    // This is what answers "nothing at 1,000g — so what DOES it cost?". 0 hides the section.
+    public int BuyerShowCheapestCount { get; set; } = 5;
+
     // Politeness gap between Universalis calls when scanning several DCs at once.
     public int BuyerScanDelayMs { get; set; } = 120;
 
@@ -181,6 +185,18 @@ public class Configuration : IPluginConfiguration
 
     // Extra market-board object name, if your client language isn't one of the built-in four.
     public string BuyerBoardNameOverride { get; set; } = "";
+
+    // Tick the board's "Partial Match" box when searching. On by default: exact-name matching is
+    // fussier about punctuation and localisation than it looks.
+    public bool BuyerPartialMatch { get; set; } = true;
+
+    // If the automated search won't fire, pause and let you type it yourself rather than skipping
+    // the item. The runner watches the board and picks straight back up once listings appear.
+    public bool BuyerManualSearchFallback { get; set; } = true;
+    public int BuyerManualSearchTimeoutSec { get; set; } = 90;
+
+    // Fallback callback opcode for the board's Search button, used only by the retry ladder.
+    public int BuyerSearchButtonOpcode { get; set; } = 0;
 
     // Addon callback opcodes for the two board clicks. Exposed because they're the only values in
     // the buy path not verified against a struct — if a game patch moves them, "/undercut buydump"

@@ -95,23 +95,68 @@ public static unsafe class MarketBoard
     public static bool ResultsOpen => Addons.IsVisible("ItemSearchResult");
 
     /// <summary>
-    /// Type an item name into the board's search field and run the search. Writes to both the
-    /// backing Utf8String and the text-input component so the UI and the search agree.
+    /// Type an item name into the board's search field and run the search.
+    ///
+    /// Writes the name to BOTH backing strings and the text-input component, forces the addon out
+    /// of wishlist/category mode with a plain field write (rather than calling SetModeFilter,
+    /// whose filter argument we can't verify), then runs the search. Returns a description of
+    /// every step and whether it succeeded, which is what the run log prints with Debug on —
+    /// so a failure says WHICH part failed instead of just hanging.
     /// </summary>
-    public static bool Search(string itemName)
+    public static string Search(string itemName, bool partialMatch)
     {
         var addon = GetItemSearch();
-        if (addon == null || itemName.Length == 0) return false;
+        if (addon == null) return "no ItemSearch addon";
+        if (string.IsNullOrEmpty(itemName)) return "empty item name";
+
+        var steps = new List<string>();
+
+        try { addon->Mode = AddonItemSearch.SearchMode.Normal; steps.Add("mode=Normal"); }
+        catch (Exception ex) { steps.Add($"mode FAILED({ex.GetType().Name})"); }
 
         var bytes = Encoding.UTF8.GetBytes(itemName + "\0");
         fixed (byte* p = bytes)
         {
-            addon->SearchText.SetString(p);
-            if (addon->SearchTextInput != null) addon->SearchTextInput->SetText(p);
+            try { addon->SearchText.SetString(p); steps.Add("text1"); }
+            catch (Exception ex) { steps.Add($"text1 FAILED({ex.GetType().Name})"); }
+
+            try { addon->SearchText2.SetString(p); steps.Add("text2"); }
+            catch (Exception ex) { steps.Add($"text2 FAILED({ex.GetType().Name})"); }
+
+            if (addon->SearchTextInput != null)
+            {
+                try { addon->SearchTextInput->SetText(p); steps.Add("input"); }
+                catch (Exception ex) { steps.Add($"input FAILED({ex.GetType().Name})"); }
+            }
+            else steps.Add("input=null");
         }
-        // ignoreFilters: true so a category filter left set by the player can't hide the item.
-        addon->RunSearch(true);
-        return true;
+
+        try { addon->PartialMatch = partialMatch; steps.Add($"partial={partialMatch}"); }
+        catch (Exception ex) { steps.Add($"partial FAILED({ex.GetType().Name})"); }
+
+        steps.Add(RunSearchOnly(true));
+        return string.Join(", ", steps);
+    }
+
+    /// <summary>
+    /// Fire the search again without retyping. Used by the retry ladder: the text is already in
+    /// place, so if the first RunSearch didn't take, this is the cheap second attempt.
+    /// </summary>
+    public static string RunSearchOnly(bool ignoreFilters)
+    {
+        var addon = GetItemSearch();
+        if (addon == null) return "runSearch: no addon";
+        try { addon->RunSearch(ignoreFilters); return $"RunSearch({ignoreFilters})"; }
+        catch (Exception ex) { return $"RunSearch({ignoreFilters}) FAILED({ex.GetType().Name}: {ex.Message})"; }
+    }
+
+    /// <summary>Click the board's Search button through the addon's own event handler.</summary>
+    public static string PressSearchButton(int opcode)
+    {
+        var addon = Addons.GetAddon("ItemSearch");
+        if (addon == null) return "searchButton: no addon";
+        try { Callback.Fire(addon, true, opcode); return $"searchButton callback({opcode})"; }
+        catch (Exception ex) { return $"searchButton callback({opcode}) FAILED({ex.GetType().Name})"; }
     }
 
     /// <summary>
@@ -279,6 +324,16 @@ public static unsafe class MarketBoard
     {
         var lines = new List<string>();
         lines.Add($"ItemSearch visible={Addons.IsVisible("ItemSearch")} ItemSearchResult visible={Addons.IsVisible("ItemSearchResult")} SelectYesno visible={Addons.IsVisible("SelectYesno")}");
+
+        var search = GetItemSearch();
+        if (search == null)
+        {
+            lines.Add("AddonItemSearch: null");
+        }
+        else
+        {
+            lines.Add($"AddonItemSearch: mode={search->Mode} filter={search->SelectedFilter} partial={search->PartialMatch} text=\"{search->SearchText.ToString()}\" text2=\"{search->SearchText2.ToString()}\" input={(search->SearchTextInput == null ? "null" : "ok")}");
+        }
 
         var agent = AgentItemSearch.Instance();
         if (agent == null)
