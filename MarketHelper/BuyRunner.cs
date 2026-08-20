@@ -57,6 +57,7 @@ public sealed class BuyRunner
     private int _ticks;
     private int _buysThisItem;
     private int _searchAttempt;
+    private int _lastListingCount;
     private long _gilAtStart;
     private long _expectedTotal;
     private int _expectedQty;
@@ -283,6 +284,7 @@ public sealed class BuyRunner
                 if (cfgRow != null) _hqOnly = cfgRow.HqOnly;
 
                 _buysThisItem = 0;
+                _lastListingCount = 0;
                 Log($"{_itemName}: want {_wantUnits} unit(s) at or under {_cap:N0}g each.");
                 State = BuyState.Search;
                 return;
@@ -431,12 +433,18 @@ public sealed class BuyRunner
 
             case BuyState.WaitListings:
             {
-                if (MarketBoard.ListingsReadyFor(_item))
+                // Settle check: the array fills progressively, so only proceed once the count has
+                // held steady across two polls. Cheap, and it replaces the unreliable
+                // WaitingForListings flag that used to gate this.
+                var now = MarketBoard.ListingCountFor(_item);
+                if (now > 0 && now == _lastListingCount)
                 {
                     _ticks = 0;
+                    _lastListingCount = 0;
                     State = BuyState.PickListing;
                     return;
                 }
+                _lastListingCount = now;
                 if (Cfg.BuyerForceListingRequest && (_ticks == 10 || _ticks == 25))
                 {
                     var again = MarketBoard.RequestListings(_item);
