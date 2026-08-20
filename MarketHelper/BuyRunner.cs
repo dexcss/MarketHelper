@@ -81,13 +81,7 @@ public sealed class BuyRunner
 
         _plan = plan;
         DryRun = dryRun;
-        _stopIdx = -1;
-        _stop = null;
-        _itemQueue = new List<uint>();
-        _itemIdx = -1;
-        _unitsBought = 0;
-        _spent = 0;
-        _simulated.Clear();
+        ResetRunState();
         Report.Clear();
         _gilAtStart = MarketBoard.Gil();
         _homeWorld = string.IsNullOrWhiteSpace(Cfg.BuyerHomeWorld) ? WorldInfo.CurrentWorld() : Cfg.BuyerHomeWorld.Trim();
@@ -97,6 +91,41 @@ public sealed class BuyRunner
             : $"Buying {plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s) for about {plan.GrandTotal:N0}g.");
 
         State = BuyState.NextStop;
+    }
+
+    /// <summary>
+    /// Clear EVERY per-run counter. This exists because forgetting one of them is silent and
+    /// baffling: _bought survived between runs, so a dry run that "bought" 1 Ale Tap on paper left
+    /// the next live run believing the order was already filled — it reported "done (1 unit(s))"
+    /// at each stop and never bought anything. Anything that accumulates during a run resets here.
+    /// </summary>
+    private void ResetRunState()
+    {
+        _stopIdx = -1;
+        _stop = null;
+        _itemQueue = new List<uint>();
+        _itemIdx = -1;
+        _item = 0;
+        _itemName = string.Empty;
+        _cap = 0;
+        _wantUnits = 0;
+        _hqOnly = false;
+
+        _unitsBought = 0;
+        _spent = 0;
+        _bought.Clear();
+        _simulated.Clear();
+
+        _buysThisItem = 0;
+        _searchAttempt = 0;
+        _lastListingCount = 0;
+        _ticks = 0;
+        _deadline = 0;
+
+        _expectedTotal = 0;
+        _expectedQty = 0;
+        _gilBeforeBuy = 0;
+        _finishAfterClose = false;
     }
 
     public void Stop()
@@ -468,7 +497,14 @@ public sealed class BuyRunner
 
                 var boughtSoFar = UnitsBoughtFor(_item);
                 var remaining = _wantUnits - boughtSoFar;
-                if (remaining <= 0) { Log($"{_itemName}: done ({boughtSoFar} unit(s))."); State = BuyState.NextItem; return; }
+                if (remaining <= 0)
+                {
+                    Log(DryRun
+                        ? $"{_itemName}: dry run complete for this stop ({boughtSoFar} unit(s) accounted for)."
+                        : $"{_itemName}: bought all {boughtSoFar} unit(s) needed here.");
+                    State = BuyState.NextItem;
+                    return;
+                }
 
                 // Bag space is re-read, never assumed.
                 var free = RetainerReader.FreePlayerBagSlots();
