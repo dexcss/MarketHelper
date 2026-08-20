@@ -87,6 +87,18 @@ public sealed class BuyPlanWindow : Window
         ImGui.SameLine(0, SW(8));
         ImGui.TextColored(Cfg.BuyerDryRun ? Blue : Gold, Cfg.BuyerDryRun ? "dry run" : "LIVE — will spend gil");
 
+        // Progress against this plan survives Stop -> SEND. If you've emptied your bags elsewhere
+        // or want to start the plan over, this is the escape hatch.
+        if (!runner.Running && plan.Bought.Count > 0)
+        {
+            ImGui.SameLine(0, SW(8));
+            if (ImGui.Button("Reset progress##resetbought"))
+            {
+                plan.Bought.Clear();
+                _plugin.Chat("[Market Helper] Buy progress for this plan cleared.");
+            }
+        }
+
         if (runner.IsPaused)
         {
             Dummy(2f);
@@ -160,15 +172,11 @@ public sealed class BuyPlanWindow : Window
             // Bought: what the last run actually moved. Blank until a run has produced numbers,
             // so an untouched plan doesn't read as "bought 0".
             ImGui.TableNextColumn();
-            if (!runner.HasRunResults)
-            {
+            var got = runner.DryRun ? runner.BoughtFor(it.ItemId) : plan.BoughtFor(it.ItemId);
+            if (!runner.HasRunResults && got == 0)
                 ImGui.TextColored(Grey, "-");
-            }
             else
-            {
-                var got = runner.BoughtFor(it.ItemId);
                 ImGui.TextColored(got >= it.Requested ? Green : got > 0 ? Gold : Red, got.ToString());
-            }
 
             ImGui.TableNextColumn(); ImGui.TextUnformatted(it.CapText);
 

@@ -119,9 +119,11 @@ public sealed class BuyRunner
                     _plannedMax[line.ItemId] = line.UnitPrice;
         _homeWorld = string.IsNullOrWhiteSpace(Cfg.BuyerHomeWorld) ? WorldInfo.CurrentWorld() : Cfg.BuyerHomeWorld.Trim();
 
+        var already = DryRun ? 0 : plan.Bought.Values.Sum();
         Log(DryRun
             ? $"DRY RUN — no gil will be spent. {plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s)."
-            : $"Buying {plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s) for about {plan.GrandTotal:N0}g.");
+            : $"Buying {plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s) for about {plan.GrandTotal:N0}g."
+              + (already > 0 ? $" Carrying on from an earlier run — {already} unit(s) already bought against this plan." : ""));
         Note(AuditKind.RunStart,
             $"{(DryRun ? "Dry run" : "Live run")} — {plan.Stops.Count} stop(s), {plan.GrandUnits} unit(s), planned {plan.GrandTotal:N0}g, starting gil {_gilAtStart:N0}",
             expected: plan.GrandTotal);
@@ -131,7 +133,7 @@ public sealed class BuyRunner
 
     /// <summary>
     /// Clear EVERY per-run counter. This exists because forgetting one of them is silent and
-    /// baffling: _bought survived between runs, so a dry run that "bought" 1 Ale Tap on paper left
+    /// baffling: the dry-run tally survived between runs, so a dry run that "bought" 1 Ale Tap left
     /// the next live run believing the order was already filled — it reported "done (1 unit(s))"
     /// at each stop and never bought anything. Anything that accumulates during a run resets here.
     /// </summary>
@@ -155,7 +157,7 @@ public sealed class BuyRunner
 
         _unitsBought = 0;
         _spent = 0;
-        _bought.Clear();
+        _dryBought.Clear();   // NOTE: the plan's real tally is deliberately NOT cleared here
         _simulated.Clear();
 
         _buysThisItem = 0;
@@ -437,6 +439,15 @@ public sealed class BuyRunner
 
                 var cfgRow = Cfg.BuyerItems.FirstOrDefault(i => i.ItemId == _item);
                 if (cfgRow != null) _hqOnly = cfgRow.HqOnly;
+
+                // Unticked on the shopping list means done or not wanted — a stale plan must not
+                // resurrect it.
+                if (cfgRow is { Enabled: false })
+                {
+                    Log($"{_itemName}: unticked on the shopping list — skipping.");
+                    State = BuyState.NextItem;
+                    return;
+                }
 
                 // EXACTLY this stop's allocation. Nothing more.
                 //
@@ -912,19 +923,26 @@ public sealed class BuyRunner
 
     private bool _finishAfterClose;
     private long _gilBeforeBuy;
-    private readonly Dictionary<uint, int> _bought = new();
+    /// <summary>
+    /// Dry-run scratch tally. Real purchases go on the PLAN so they survive Stop → SEND; paper
+    /// purchases must not, or a dry run would convince the next live run the order was filled.
+    /// </summary>
+    private readonly Dictionary<uint, int> _dryBought = new();
+
+    /// <summary>Where buys are counted: the plan for real runs, a throwaway dict for dry runs.</summary>
+    private Dictionary<uint, int> Tally => DryRun || _plan == null ? _dryBought : _plan.Bought;
 
     private void RecordBought(uint itemId, int qty)
-        => _bought[itemId] = (_bought.TryGetValue(itemId, out var n) ? n : 0) + qty;
+        => Tally[itemId] = (Tally.TryGetValue(itemId, out var n) ? n : 0) + qty;
 
     /// <summary>Units bought (or, in a dry run, accounted for) this run — for the plan's Bought column.</summary>
-    public int BoughtFor(uint itemId) => _bought.TryGetValue(itemId, out var n) ? n : 0;
+    public int BoughtFor(uint itemId) => Tally.TryGetValue(itemId, out var n) ? n : 0;
 
     /// <summary>True once a run has produced numbers worth showing.</summary>
-    public bool HasRunResults => _bought.Count > 0;
+    public bool HasRunResults => Tally.Count > 0;
 
     private int UnitsBoughtFor(uint itemId)
-        => _bought.TryGetValue(itemId, out var n) ? n : 0;
+        => Tally.TryGetValue(itemId, out var n) ? n : 0;
 
     private static string SimKey(MarketBoard.BoardListing l)
         => $"{l.Index}|{l.UnitPrice}|{l.Quantity}|{l.Seller}";
@@ -1096,6 +1114,7 @@ public sealed class BuyRunner
 
         var finished = new List<string>();
         var reduced = new List<string>();
+        var banked = new List<uint>();
 
         foreach (var row in Cfg.BuyerItems)
         {
@@ -1106,6 +1125,7 @@ public sealed class BuyRunner
             var name = ItemSearch.FindById(row.ItemId);
             if (string.IsNullOrEmpty(name)) name = $"#{row.ItemId}";
 
+            banked.Add(row.ItemId);
             if (got >= row.Quantity)
             {
                 row.Enabled = false;
@@ -1121,6 +1141,13 @@ public sealed class BuyRunner
 
         if (finished.Count == 0 && reduced.Count == 0) return;
         Cfg.Save();
+
+        // Progress has now been BANKED into the shopping list, so the plan's tally must go back to
+        // zero or the two would double-count: the row says "2 left" and the tally still says
+        // "3 bought", and the next SEND would compute a target of nothing at all. Exactly one of
+        // them owns the outstanding need at any moment, and after this point it's the list.
+        if (_plan != null)
+            foreach (var id in banked) _plan.Bought.Remove(id);
 
         if (finished.Count > 0)
             Log(finished.Count <= 6

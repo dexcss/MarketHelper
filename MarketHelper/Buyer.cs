@@ -93,6 +93,20 @@ public sealed class BuyPlanResult
     public readonly List<ItemSummary> Items = new();
     public readonly List<string> Warnings = new();
 
+    /// <summary>
+    /// Units REALLY bought against this plan, accumulated across every SEND that uses it.
+    ///
+    /// It lives on the plan rather than on the runner because progress has to survive Stop →
+    /// SEND: stopping halfway through 5 Bar Racks with 3 bought and pressing SEND again must
+    /// buy 2, not 5. A fresh SCAN builds a new plan, which starts this empty again — that is
+    /// exactly the moment the tally SHOULD reset.
+    ///
+    /// Dry runs never write here; they keep their own throwaway tally.
+    /// </summary>
+    public readonly Dictionary<uint, int> Bought = new();
+
+    public int BoughtFor(uint itemId) => Bought.TryGetValue(itemId, out var n) ? n : 0;
+
     public long GrandTotal => Stops.Sum(s => s.TotalCost);
     public int GrandUnits => Stops.Sum(s => s.TotalUnits);
     public bool HasWork => Stops.Any(s => s.Lines.Count > 0);
