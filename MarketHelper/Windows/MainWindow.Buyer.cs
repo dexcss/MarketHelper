@@ -577,9 +577,9 @@ public partial class MainWindow
 
         var depth = Cfg.BuyerListingDepth;
         ImGui.SetNextItemWidth(SW(180));
-        if (ImGui.InputInt("Listings to fetch per world", ref depth, 20)) { Cfg.BuyerListingDepth = Math.Clamp(depth, 20, 500); Cfg.Save(); }
+        if (ImGui.InputInt("Listings to fetch per data center", ref depth, 50)) { Cfg.BuyerListingDepth = Math.Clamp(depth, 20, 500); Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
-        HelpMarker("How deep to read each world's listings. Raise it if \"Found\" comes back short for an item you know has plenty listed — a deep market can be truncated at 100.");
+        HelpMarker("How deep to read each data center's listings. Furnishing markets run to hundreds of rows, so raise this if \"Found\" comes back short for something you can see plenty of on Universalis.");
 
         var autoOff = Cfg.BuyerAutoDisableCompleted;
         if (ImGui.Checkbox("Update the shopping list after a run", ref autoOff)) { Cfg.BuyerAutoDisableCompleted = autoOff; Cfg.Save(); }

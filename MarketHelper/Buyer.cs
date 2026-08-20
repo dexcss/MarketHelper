@@ -151,6 +151,13 @@ public sealed class Buyer
             }
             case 2:
             {
+                // Expand the region into its data centers rather than querying "North-America"
+                // once. The listing depth is PER QUERY, so a single region call capped the whole
+                // region at one page — for a deep item that's a fraction of what's really listed.
+                // Four DC calls give four times the depth and per-DC failure reporting.
+                var dcs = WorldInfo.DataCentersInRegion(WorldInfo.CurrentRegionId());
+                if (dcs.Count > 0) return dcs;
+
                 var region = WorldInfo.CurrentRegion();
                 return string.IsNullOrWhiteSpace(region) ? new List<string>() : new List<string> { region };
             }
@@ -296,9 +303,14 @@ public sealed class Buyer
                 // Own retainers are filtered out — you can't buy from yourself, and one of ours
                 // showing up as "the cheapest" would just wedge the run on that row. Excluded
                 // worlds are dropped here too, so they never reach the plan or the route.
+                // Dedupe ONLY on Universalis's listing id, and only when it gave us one.
+                // An earlier version keyed on world+retainer+price+quantity, which quietly threw
+                // away real inventory: one retainer commonly lists 16 identical rows of the same
+                // furnishing, and every one of them is separately purchasable. That showed up as
+                // "only 3 of 26" for an item with hundreds listed.
                 var seen = new HashSet<string>();
                 var listings = merged
-                    .Where(l => seen.Add($"{l.World}|{l.Retainer}|{l.PricePerUnit}|{l.Quantity}|{l.Hq}"))
+                    .Where(l => string.IsNullOrEmpty(l.ListingId) || seen.Add(l.ListingId))
                     .Where(l => l.PricePerUnit > 0 && l.Quantity > 0)
                     .Where(l => !item.HqOnly || l.Hq)
                     .Where(l => !ctx.MyRetainers.Contains(Normalise(l.Retainer)))

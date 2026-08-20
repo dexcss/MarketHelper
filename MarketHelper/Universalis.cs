@@ -32,8 +32,16 @@ public static class Universalis
         public readonly bool Hq;
         public readonly string World;   // populated for DC/region queries
         public readonly string Retainer;
-        public Listing(long price, int qty, bool hq, string world, string retainer)
-        { PricePerUnit = price; Quantity = qty; Hq = hq; World = world; Retainer = retainer; }
+
+        /// <summary>
+        /// Universalis's own listing id. The ONLY safe way to tell two listings apart: one
+        /// retainer routinely posts many identical rows (same price, same quantity), and they are
+        /// separate purchasable listings, not duplicates.
+        /// </summary>
+        public readonly string ListingId;
+
+        public Listing(long price, int qty, bool hq, string world, string retainer, string listingId)
+        { PricePerUnit = price; Quantity = qty; Hq = hq; World = world; Retainer = retainer; ListingId = listingId; }
     }
 
     /// <summary>Result of a listings query for one location (world/DC/region).</summary>
@@ -79,7 +87,8 @@ public static class Universalis
                     var isHq = l.TryGetProperty("hq", out var h) && h.GetBoolean();
                     var world = l.TryGetProperty("worldName", out var w) ? (w.GetString() ?? string.Empty) : string.Empty;
                     var ret = l.TryGetProperty("retainerName", out var r) ? (r.GetString() ?? string.Empty) : string.Empty;
-                    result.Listings.Add(new Listing(price, qty, isHq, world, ret));
+                    var lid = l.TryGetProperty("listingID", out var li) ? (li.GetString() ?? string.Empty) : string.Empty;
+                    result.Listings.Add(new Listing(price, qty, isHq, world, ret, lid));
                     if (result.Listings.Count >= count) break;
                 }
             }

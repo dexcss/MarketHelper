@@ -178,9 +178,10 @@ public class Configuration : IPluginConfiguration
     // This is what answers "nothing at 1,000g — so what DOES it cost?". 0 hides the section.
     public int BuyerShowCheapestCount { get; set; } = 5;
 
-    // How many listings to pull per world per item. 100 is plenty for most things, but a deep
-    // market (91 dining tables) can be truncated by it — raise if "Found" comes back short.
-    public int BuyerListingDepth { get; set; } = 100;
+    // How many listings to pull per DATA CENTER per item. Furnishing markets are deep — hundreds
+    // of rows for a popular piece — so this defaults high. Raise it if "Found" comes back short
+    // for something you can see plenty of on Universalis.
+    public int BuyerListingDepth { get; set; } = 200;
 
     // After a real run, rewrite the shopping list to match what's actually left: deduct what was
     // bought from each row's quantity, and untick rows whose order is complete. Stops a second
