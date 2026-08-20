@@ -417,12 +417,24 @@ public partial class MainWindow
         if (ImGui.TreeNode("Advanced — board click opcodes"))
         {
             WrapText(Grey, "Only change these if a game patch breaks the buy path. Run \"/undercut buydump\" at an open board and read the output first.");
-            var sel = Cfg.BuyerSelectResultOpcode;
+            var learn = Cfg.BuyerLearnEvents;
+            if (ImGui.Checkbox("Learn mode — log board events", ref learn)) { Cfg.BuyerLearnEvents = learn; Cfg.Save(); _plugin.Buy.ApplyLearnMode(); }
+            ImGui.SameLine(0, SW(6));
+            HelpMarker("Turn on, open a market board, and click a search result and a listing BY HAND. Each click prints its event type and parameter to chat — put those numbers in the fields below and the Buyer will reproduce them exactly.");
+
+            var rowType = Cfg.BuyerResultRowEventType;
             ImGui.SetNextItemWidth(SW(120));
-            if (ImGui.InputInt("Open search result", ref sel, 1)) { Cfg.BuyerSelectResultOpcode = sel; Cfg.Save(); }
-            var buy = Cfg.BuyerBuyOpcode;
+            if (ImGui.InputInt("Result row event", ref rowType, 1)) { Cfg.BuyerResultRowEventType = rowType; Cfg.Save(); }
+            var rowOff = Cfg.BuyerResultRowParamOffset;
             ImGui.SetNextItemWidth(SW(120));
-            if (ImGui.InputInt("Click a listing", ref buy, 1)) { Cfg.BuyerBuyOpcode = buy; Cfg.Save(); }
+            if (ImGui.InputInt("Result row param offset", ref rowOff, 1)) { Cfg.BuyerResultRowParamOffset = rowOff; Cfg.Save(); }
+
+            var listType = Cfg.BuyerListingRowEventType;
+            ImGui.SetNextItemWidth(SW(120));
+            if (ImGui.InputInt("Listing row event", ref listType, 1)) { Cfg.BuyerListingRowEventType = listType; Cfg.Save(); }
+            var listOff = Cfg.BuyerListingRowParamOffset;
+            ImGui.SetNextItemWidth(SW(120));
+            if (ImGui.InputInt("Listing row param offset", ref listOff, 1)) { Cfg.BuyerListingRowParamOffset = listOff; Cfg.Save(); }
             var searchBtn = Cfg.BuyerSearchButtonOpcode;
             ImGui.SetNextItemWidth(SW(120));
             if (ImGui.InputInt("Search button (fallback)", ref searchBtn, 1)) { Cfg.BuyerSearchButtonOpcode = searchBtn; Cfg.Save(); }

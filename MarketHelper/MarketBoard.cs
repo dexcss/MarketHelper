@@ -32,9 +32,10 @@ namespace MarketHelper;
 /// and abort the run. That means a wrong row click costs nothing: it either does nothing, or it
 /// raises a dialog we refuse.
 ///
-/// The two callback opcodes below are the only values in this file that are not verified against
-/// a struct definition. They are exposed in config (BuyerSelectResultOpcode / BuyerBuyOpcode) so
-/// they can be corrected live from the "/undercut buydump" output without a rebuild.
+/// List rows are clicked by sending a real AtkEventType.ListItemClick (35) to the list component
+/// with the row index as the parameter — NOT by firing an addon callback case, which is what an
+/// earlier version did and why nothing happened. The event codes are in config, and "learn mode"
+/// captures the real ones live by watching what the game sends when you click a row by hand.
 /// </summary>
 public static unsafe class MarketBoard
 {
@@ -207,12 +208,75 @@ public static unsafe class MarketBoard
         return agent == null ? 0 : (int)agent->ListingPageItemCount;
     }
 
-    /// <summary>Click a row in the board's search results, opening that item's listings.</summary>
-    public static void SelectResultRow(int row, int opcode)
+    /// <summary>
+    /// Ask the server directly for this item's listings, bypassing the result-row click entirely.
+    ///
+    /// InfoProxyItemSearch::SearchItemId is what RequestData() sends, so setting the id and
+    /// calling the proxy's own request is a struct-verified path to load listings — no callback
+    /// opcode guessing involved. The listings land in the same proxy array we already read.
+    /// </summary>
+    public static string RequestListings(uint itemId)
     {
-        var addon = Addons.GetAddon("ItemSearch");
-        if (addon == null || row < 0) return;
-        Callback.Fire(addon, true, opcode, row);
+        var proxy = MarketData.GetProxy();
+        if (proxy == null) return "requestListings: proxy null";
+        try
+        {
+            proxy->SearchItemId = itemId;
+            var ok = proxy->InfoProxyPageInterface.InfoProxyInterface.RequestData();
+            return $"RequestData({itemId})={ok}";
+        }
+        catch (Exception ex) { return $"RequestData FAILED({ex.GetType().Name}: {ex.Message})"; }
+    }
+
+    /// <summary>Diagnostic: send one event type to the result list, for "/undercut buytry".</summary>
+    public static string TryResultOpcode(int eventType, int row)
+    {
+        if (GetItemSearch() == null) return "no ItemSearch addon — open a market board first";
+        var detail = SelectResultRow(row, eventType, 0);
+        return $"{detail} — check whether the listings window opened";
+    }
+
+    /// <summary>
+    /// Dispatch a raw Atk event to an addon, targeting one of its component nodes.
+    ///
+    /// This is the mechanism the game itself uses for list rows, and it is NOT the same thing as
+    /// an addon callback. A row click in an AtkComponentList arrives as AtkEventType.ListItemClick
+    /// (35) with the row index as the event parameter — firing an addon callback case instead does
+    /// nothing at all, which is exactly what we saw. Verified against the AtkEventType enum in
+    /// FFXIVClientStructs and against the event codes this plugin already uses for RetainerSell
+    /// (Compare Prices = 4, Confirm = 21).
+    /// </summary>
+    public static void SendEvent(AtkUnitBase* addon, AtkResNode* target, AtkEventType type, int param)
+    {
+        if (addon == null) return;
+
+        var evt = stackalloc byte[0x40];
+        var data = stackalloc byte[0x40];
+        for (var i = 0; i < 0x40; i++) { evt[i] = 0; data[i] = 0; }
+
+        // AtkEvent: +0x08 = target node, +0x10 = listener.
+        *(nint*)(evt + 0x08) = (nint)target;
+        *(nint*)(evt + 0x10) = (nint)addon;
+
+        ((AtkEventListener*)addon)->ReceiveEvent(type, param, (AtkEvent*)evt, (AtkEventData*)data);
+    }
+
+    /// <summary>
+    /// Click a row in the board's search results, opening that item's listings. Sends a real
+    /// ListItemClick to the results list rather than an addon callback.
+    /// </summary>
+    public static string SelectResultRow(int row, int eventType, int eventParamOffset)
+    {
+        var addon = GetItemSearch();
+        if (addon == null || row < 0) return "selectRow: no addon";
+        try
+        {
+            var list = addon->ResultsList;
+            var target = list == null ? null : (AtkResNode*)list->AtkComponentBase.OwnerNode;
+            SendEvent(&addon->AtkUnitBase, target, (AtkEventType)eventType, row + eventParamOffset);
+            return $"row click: type={eventType} param={row + eventParamOffset} target={(target == null ? "null" : "list")}";
+        }
+        catch (Exception ex) { return $"row click FAILED({ex.GetType().Name}: {ex.Message})"; }
     }
 
     // ---- Listings ----------------------------------------------------------------------------
@@ -272,12 +336,22 @@ public static unsafe class MarketBoard
         return Listings().Count > 0;
     }
 
-    /// <summary>Click a listing row to start a purchase. Raises the game's confirm dialog.</summary>
-    public static void ClickListing(int index, int opcode)
+    /// <summary>
+    /// Click a listing row to start a purchase. Raises the game's confirm dialog, which BuyRunner
+    /// then verifies before answering. Same ListItemClick mechanism as the search results.
+    /// </summary>
+    public static string ClickListing(int index, int eventType, int eventParamOffset)
     {
-        var addon = Addons.GetAddon("ItemSearchResult");
-        if (addon == null || index < 0) return;
-        Callback.Fire(addon, true, opcode, index);
+        var addon = GetItemSearchResult();
+        if (addon == null || index < 0) return "clickListing: no ItemSearchResult addon";
+        try
+        {
+            var list = addon->Results;
+            var target = list == null ? null : (AtkResNode*)list->AtkComponentBase.OwnerNode;
+            SendEvent(&addon->AtkUnitBase, target, (AtkEventType)eventType, index + eventParamOffset);
+            return $"listing click: type={eventType} param={index + eventParamOffset} target={(target == null ? "null" : "list")}";
+        }
+        catch (Exception ex) { return $"listing click FAILED({ex.GetType().Name}: {ex.Message})"; }
     }
 
     // ---- Confirmation dialog -----------------------------------------------------------------
@@ -351,6 +425,8 @@ public static unsafe class MarketBoard
     {
         var lines = new List<string>();
         lines.Add($"ItemSearch visible={Addons.IsVisible("ItemSearch")} ItemSearchResult visible={Addons.IsVisible("ItemSearchResult")} SelectYesno visible={Addons.IsVisible("SelectYesno")}");
+        if (!Addons.IsVisible("ItemSearch") && !Addons.IsVisible("ItemSearchResult"))
+            lines.Add("NOTE: no board open — run this AT an open market board or most fields read null.");
 
         var search = GetItemSearch();
         if (search == null)

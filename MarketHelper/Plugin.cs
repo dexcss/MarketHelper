@@ -76,6 +76,7 @@ public sealed class Plugin : IDalamudPlugin
         Buyer = new Buyer(this);
         Buy = new BuyRunner(this);
         if (Config.AutoRetainerIntegration) ArBridge.Enable();
+        Buy.ApplyLearnMode();
 
         _mainWindow = new MainWindow(this);
         _windows.AddWindow(_mainWindow);
@@ -84,7 +85,7 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(Command, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open Market Helper. Subcommands: run / stop / now / dump / buydump.",
+            HelpMessage = "Open Market Helper. Subcommands: run / stop / now / dump / buydump / buytry / buylearn.",
         });
         foreach (var alias in OpenAliases)
         {
@@ -118,6 +119,28 @@ public sealed class Plugin : IDalamudPlugin
         {
             Listener.PriceOpenItemNow();
             _mainWindow.IsOpen = true;
+        }
+        else if (args.StartsWith("buytry"))
+        {
+            // Diagnostic: find the ItemSearch callback case that opens a search result.
+            // Usage at an open board, AFTER a search has listed the item: /undercut buytry 3
+            var parts = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2 || !int.TryParse(parts[1], out var opcode))
+            {
+                Chat("[Market Helper] Usage: /undercut buytry <number>  (e.g. /undercut buytry 3)");
+                Chat("[Market Helper] Search an item on the board first, then try cases one at a time until the listings window opens.");
+            }
+            else
+            {
+                var row = parts.Length > 2 && int.TryParse(parts[2], out var r) ? r : 0;
+                Chat($"[Market Helper] {MarketBoard.TryResultOpcode(opcode, row)}");
+            }
+        }
+        else if (args == "buylearn")
+        {
+            Config.BuyerLearnEvents = !Config.BuyerLearnEvents;
+            Config.Save();
+            Buy.ApplyLearnMode();
         }
         else if (args == "buydump")
         {
@@ -154,6 +177,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         Framework.Update -= OnFrameworkUpdate;
+        Buy.DisposeLearnMode();
         Listener.Dispose();
         PluginInterface.UiBuilder.Draw -= _windows.Draw;
         PluginInterface.UiBuilder.OpenMainUi -= OpenMain;

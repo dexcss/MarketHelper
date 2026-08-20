@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Dalamud.Game.Addon.Lifecycle;
+using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using ECommons.GameHelpers;
 
 namespace MarketHelper;
@@ -329,7 +331,12 @@ public sealed class BuyRunner
                 if (row >= 0)
                 {
                     if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: {_itemName} at result row {row} of {MarketBoard.ResultPageCount()}.");
-                    MarketBoard.SelectResultRow(row, Cfg.BuyerSelectResultOpcode);
+                    // Two ways of loading the listings, on purpose. The row click drives the real
+                    // UI (which we need open to buy); the proxy request is struct-verified and
+                    // loads the listing data even if the click's callback case is wrong.
+                    var click = MarketBoard.SelectResultRow(row, Cfg.BuyerResultRowEventType, Cfg.BuyerResultRowParamOffset);
+                    var req = MarketBoard.RequestListings(_item);
+                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: {click}; {req}");
                     _ticks = 0;
                     Wait(700);
                     State = BuyState.WaitListings;
@@ -403,7 +410,7 @@ public sealed class BuyRunner
                 var manualRow = MarketBoard.FindResultRow(_item);
                 if (manualRow >= 0)
                 {
-                    MarketBoard.SelectResultRow(manualRow, Cfg.BuyerSelectResultOpcode);
+                    MarketBoard.SelectResultRow(manualRow, Cfg.BuyerResultRowEventType, Cfg.BuyerResultRowParamOffset);
                     _ticks = 0;
                     Wait(700);
                     State = BuyState.WaitListings;
@@ -429,6 +436,13 @@ public sealed class BuyRunner
                     _ticks = 0;
                     State = BuyState.PickListing;
                     return;
+                }
+                // Nudge the request again a couple of times before giving up — a dropped request
+                // is far more likely than the server genuinely having nothing.
+                if (_ticks == 10 || _ticks == 25)
+                {
+                    var again = MarketBoard.RequestListings(_item);
+                    if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: re-request -> {again}");
                 }
                 if (++_ticks > 40)
                 {
@@ -476,6 +490,24 @@ public sealed class BuyRunner
                 _expectedTotal = pick.Total;
                 _expectedQty = pick.Quantity;
 
+                // A real purchase needs the listings WINDOW, not just the listing data. If the
+                // proxy loaded but the UI didn't open, buying blind is exactly what we refuse to
+                // do — hand it to you instead.
+                if (!DryRun && !MarketBoard.ResultsOpen)
+                {
+                    if (Cfg.BuyerManualSearchFallback)
+                    {
+                        Log($"{_itemName}: prices loaded but the listings window isn't open, so I won't click blind. Open it yourself and I'll carry on.");
+                        _ticks = 0;
+                        State = BuyState.WaitManualSearch;
+                        Wait(500);
+                        return;
+                    }
+                    Log($"{_itemName}: listings window isn't open — skipping rather than clicking blind.");
+                    State = BuyState.NextItem;
+                    return;
+                }
+
                 // Gil safety, re-read live: reserve floor and optional per-run spend ceiling.
                 var gil = MarketBoard.Gil();
                 if (gil - _expectedTotal < Cfg.BuyerGilReserve)
@@ -507,8 +539,8 @@ public sealed class BuyRunner
                 }
 
                 Status = $"Buying {pick.Quantity}x {_itemName} at {pick.UnitPrice:N0}g...";
-                if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: clicking listing rawIdx={pick.Index} {pick.UnitPrice:N0}g x{pick.Quantity}.");
-                MarketBoard.ClickListing(pick.Index, Cfg.BuyerBuyOpcode);
+                var lc = MarketBoard.ClickListing(pick.Index, Cfg.BuyerListingRowEventType, Cfg.BuyerListingRowParamOffset);
+                if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: buying rawIdx={pick.Index} {pick.UnitPrice:N0}g x{pick.Quantity} — {lc}");
                 _gilBeforeBuy = gil;
                 _ticks = 0;
                 Wait(500);
@@ -714,6 +746,68 @@ public sealed class BuyRunner
         Status = msg;
         Report.Add(msg);
         _plugin.Chat($"[Market Helper] {msg}");
+    }
+
+    // ---- learn mode ---------------------------------------------------------------------------
+
+    private bool _learnHooked;
+
+    /// <summary>
+    /// Attach or detach the board event listeners used by "learn mode". With it on, every event
+    /// the ItemSearch / ItemSearchResult addons receive is printed with its type and parameter —
+    /// so clicking a result row by hand tells us the exact numbers to send back, instead of
+    /// guessing them. Safe to call repeatedly; it reconciles against the config flag.
+    /// </summary>
+    public void ApplyLearnMode()
+    {
+        var want = Cfg.BuyerLearnEvents;
+        if (want == _learnHooked) return;
+
+        try
+        {
+            if (want)
+            {
+                _plugin.AddonLifecycle.RegisterListener(AddonEvent.PostReceiveEvent, "ItemSearch", OnBoardEvent);
+                _plugin.AddonLifecycle.RegisterListener(AddonEvent.PostReceiveEvent, "ItemSearchResult", OnBoardEvent);
+                _plugin.Chat("[Market Helper] Learn mode ON — open a market board, click a search result, then click a listing. Turn it off when done.");
+            }
+            else
+            {
+                _plugin.AddonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, "ItemSearch", OnBoardEvent);
+                _plugin.AddonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, "ItemSearchResult", OnBoardEvent);
+                _plugin.Chat("[Market Helper] Learn mode OFF.");
+            }
+            _learnHooked = want;
+        }
+        catch (Exception ex)
+        {
+            _plugin.Chat($"[Market Helper] Learn mode couldn't be changed: {ex.Message}");
+        }
+    }
+
+    private void OnBoardEvent(AddonEvent type, AddonArgs args)
+    {
+        try
+        {
+            if (args is not AddonReceiveEventArgs e) return;
+            // Rollover/rollout and mouse-move fire constantly and would bury the useful lines.
+            var t = (int)e.AtkEventType;
+            if (t is 33 or 34 or 8 or 9) return;
+            _plugin.Chat($"[Market Helper] LEARN {args.AddonName}: eventType={t} param={e.EventParam}");
+        }
+        catch { /* diagnostics must never break a run */ }
+    }
+
+    public void DisposeLearnMode()
+    {
+        if (!_learnHooked) return;
+        try
+        {
+            _plugin.AddonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, "ItemSearch", OnBoardEvent);
+            _plugin.AddonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, "ItemSearchResult", OnBoardEvent);
+        }
+        catch { }
+        _learnHooked = false;
     }
 
     private void Log(string msg)

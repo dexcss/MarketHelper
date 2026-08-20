@@ -202,11 +202,18 @@ public class Configuration : IPluginConfiguration
     // Fallback callback opcode for the board's Search button, used only by the retry ladder.
     public int BuyerSearchButtonOpcode { get; set; } = 0;
 
-    // Addon callback opcodes for the two board clicks. Exposed because they're the only values in
-    // the buy path not verified against a struct — if a game patch moves them, "/undercut buydump"
-    // shows the state and these can be corrected without a rebuild.
-    public int BuyerSelectResultOpcode { get; set; } = 2;    // ItemSearch: open a search result
-    public int BuyerBuyOpcode { get; set; } = 0;             // ItemSearchResult: click a listing
+    // Atk event codes for the two list-row clicks. 35 = AtkEventType.ListItemClick, which is what
+    // the game sends when you click a row in an AtkComponentList; the parameter is the row index.
+    // Exposed (with a learn mode to capture the real values) because these are the only numbers in
+    // the buy path that a game patch could move.
+    public int BuyerResultRowEventType { get; set; } = 35;
+    public int BuyerResultRowParamOffset { get; set; } = 0;
+    public int BuyerListingRowEventType { get; set; } = 35;
+    public int BuyerListingRowParamOffset { get; set; } = 0;
+
+    // Log every event the board addons receive, so clicking a row by hand reveals the exact
+    // event type and parameter to use. Off by default — it is very chatty.
+    public bool BuyerLearnEvents { get; set; } = false;
 
     [NonSerialized] private IDalamudPluginInterface? pluginInterface;
 
