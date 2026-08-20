@@ -354,10 +354,16 @@ public static unsafe class MarketBoard
     /// it stays set even with a fully populated window. Data presence is the only honest signal:
     /// rows that match the item we asked for and carry a real price.
     /// </summary>
-    public static bool ListingsReadyFor(uint itemId) => Listings(itemId).Count > 0;
+    /// <summary>
+    /// Requires the listings WINDOW to be open, not just data in the proxy. The proxy keeps the
+    /// previous item's (or previous world's) listings cached, so "there is data" on its own is a
+    /// stale read — it made the runner skip the row click on the second stop and then refuse to
+    /// buy because the window it needed was never opened.
+    /// </summary>
+    public static bool ListingsReadyFor(uint itemId) => ResultsOpen && Listings(itemId).Count > 0;
 
     /// <summary>How many readable listings there are right now, for settle checks.</summary>
-    public static int ListingCountFor(uint itemId) => Listings(itemId).Count;
+    public static int ListingCountFor(uint itemId) => ResultsOpen ? Listings(itemId).Count : 0;
 
     /// <summary>
     /// Why the listings aren't readable yet — printed with the give-up message so the failure

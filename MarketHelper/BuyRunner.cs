@@ -58,6 +58,9 @@ public sealed class BuyRunner
     private int _buysThisItem;
     private int _searchAttempt;
     private int _lastListingCount;
+    private bool _resultsClosed;
+    private bool _announcedManualPickup;
+    private int _blindGuardHits;
     private long _gilAtStart;
     private long _expectedTotal;
     private int _expectedQty;
@@ -119,6 +122,9 @@ public sealed class BuyRunner
         _buysThisItem = 0;
         _searchAttempt = 0;
         _lastListingCount = 0;
+        _resultsClosed = false;
+        _blindGuardHits = 0;
+        _announcedManualPickup = false;
         _ticks = 0;
         _deadline = 0;
 
@@ -293,6 +299,19 @@ public sealed class BuyRunner
 
             case BuyState.NextItem:
             {
+                // Close the previous item's listings window first. The proxy caches its rows, so
+                // leaving it open lets the next item read the last one's prices.
+                if (MarketBoard.ResultsOpen && !_resultsClosed)
+                {
+                    Addons.CloseAddon("ItemSearchResult");
+                    _resultsClosed = true;
+                    Wait(400);
+                    return;
+                }
+                _resultsClosed = false;
+                _blindGuardHits = 0;
+                _announcedManualPickup = false;
+
                 _itemIdx++;
                 if (_stop == null || _itemIdx >= _itemQueue.Count)
                 {
@@ -433,7 +452,11 @@ public sealed class BuyRunner
                 }
                 if (MarketBoard.ListingsReadyFor(_item))
                 {
-                    Log($"{_itemName}: listings are up — carrying on.");
+                    if (!_announcedManualPickup)
+                    {
+                        Log($"{_itemName}: listings are up — carrying on.");
+                        _announcedManualPickup = true;
+                    }
                     _ticks = 0;
                     State = BuyState.PickListing;
                     return;
@@ -539,6 +562,15 @@ public sealed class BuyRunner
                 // do — hand it to you instead.
                 if (!DryRun && !MarketBoard.ResultsOpen)
                 {
+                    // Bounce guard: handing back to the manual state only helps if something
+                    // changes. If we land here twice for the same item, we're in a loop — say so
+                    // once and move on instead of filling the log with the same two lines.
+                    if (++_blindGuardHits > 2)
+                    {
+                        Log($"{_itemName}: the listings window won't stay open — skipping this item.");
+                        State = BuyState.NextItem;
+                        return;
+                    }
                     if (Cfg.BuyerManualSearchFallback)
                     {
                         Log($"{_itemName}: prices loaded but the listings window isn't open, so I won't click blind. Open it yourself and I'll carry on.");
