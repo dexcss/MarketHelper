@@ -534,6 +534,11 @@ public partial class MainWindow
             ImGui.SameLine(0, SW(10));
             ImGui.TextColored(Gold, "LIVE — will spend gil");
         }
+        if (runner.IsPaused)
+        {
+            ImGui.SameLine(0, SW(10));
+            if (ImGui.Button("RESUME##buyresume", new Vector2(SW(120), SW(30)))) runner.Resume();
+        }
         if (runner.Running)
         {
             ImGui.SameLine(0, SW(10));
@@ -550,7 +555,17 @@ public partial class MainWindow
         if (!string.IsNullOrEmpty(buyer.Error) && !buyer.Scanning)
             WrapText(Red, buyer.Error!);
 
-        if (runner.Running || runner.State == BuyState.Error || runner.State == BuyState.Done)
+        if (runner.IsPaused)
+        {
+            Dummy(2f);
+            WrapText(Gold, $"PAUSED — {runner.PauseReason}");
+            var free = runner.FreeSlotsNow();
+            if (free >= 0)
+                WrapText(free >= Math.Max(1, Cfg.BuyerMinFreeSlots) ? Green : Grey,
+                    $"Free bag slots: {free} (need {Math.Max(1, Cfg.BuyerMinFreeSlots)}).");
+            WrapText(Grey, "Resume carries on from the same world and item — nothing is re-bought. Stop keeps what you've already bought and updates the list.");
+        }
+        else if (runner.Running || runner.State == BuyState.Error || runner.State == BuyState.Done)
         {
             var col = runner.State == BuyState.Error ? Red : runner.Running ? Gold : Green;
             WrapText(col, runner.Status);
@@ -580,6 +595,25 @@ public partial class MainWindow
         if (ImGui.InputInt("Listings to fetch per data center", ref depth, 50)) { Cfg.BuyerListingDepth = Math.Clamp(depth, 20, 500); Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
         HelpMarker("How deep to read each data center's listings. Furnishing markets run to hundreds of rows, so raise this if \"Found\" comes back short for something you can see plenty of on Universalis.");
+
+        var topUp = Cfg.BuyerTopUpShortfalls;
+        if (ImGui.Checkbox("Make up shortfalls at later stops", ref topUp)) { Cfg.BuyerTopUpShortfalls = topUp; Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("If an early world had fewer listings than the scan promised, later worlds buy the difference instead of sticking to their own share. Also lets a world be tried for an item the plan gave it none of, as long as the scan saw stock there.");
+
+        using (ImRaiiDisabled(!Cfg.BuyerTopUpShortfalls))
+        {
+            var overPlan = Cfg.BuyerTopUpMaxOverPlanPercent;
+            ImGui.SetNextItemWidth(SW(180));
+            if (ImGui.InputInt("Uncapped top-up limit (% over plan)", ref overPlan, 5)) { Cfg.BuyerTopUpMaxOverPlanPercent = Math.Clamp(overPlan, 0, 500); Cfg.Save(); }
+            ImGui.SameLine(0, SW(6));
+            HelpMarker("For items with NO price cap: topping up means buying listings the plan never priced in, so it won't pay more than the dearest price the plan had for that item plus this percentage. 0 removes the limit. Items with their own cap ignore this.");
+        }
+
+        var audit = Cfg.BuyerWriteAuditLog;
+        if (ImGui.Checkbox("Write an audit log for each run", ref audit)) { Cfg.BuyerWriteAuditLog = audit; Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Saves a CSV of the run — every purchase with planned vs actual cost, every skip and its reason — to the plugin config folder. The Audit tab in the Buy Plan window shows the same thing live, with an Open folder button.");
 
         var autoOff = Cfg.BuyerAutoDisableCompleted;
         if (ImGui.Checkbox("Update the shopping list after a run", ref autoOff)) { Cfg.BuyerAutoDisableCompleted = autoOff; Cfg.Save(); }

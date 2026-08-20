@@ -11,7 +11,7 @@ public enum BuyState
 {
     Idle, NextStop, Travel, WaitTravel, FindBoard, WalkBoard, InteractBoard, WaitBoard,
     NextItem, Search, WaitTyped, WaitResults, WaitManualSearch, SelectRow, WaitListings, PickListing,
-    WaitConfirm, WaitPurchase, CloseBoard, ReturnHome, WaitReturn, Done, Error,
+    WaitConfirm, WaitPurchase, CloseBoard, ReturnHome, WaitReturn, Paused, Done, Error,
 }
 
 /// <summary>
@@ -38,7 +38,21 @@ public sealed class BuyRunner
     public BuyState State { get; private set; } = BuyState.Idle;
     public string Status { get; private set; } = "Idle.";
     public List<string> Report { get; } = new();
+
+    /// <summary>
+    /// Structured trail of everything the run did — every purchase with expected vs actual cost,
+    /// every skip and its reason, every pause. This is the record you check afterwards rather
+    /// than scrolling chat, and it's what makes a mis-buy visible instead of invisible.
+    /// </summary>
+    public List<BuyAuditEntry> Audit { get; } = new();
+
+    /// <summary>Where the last run's CSV landed, if one was written.</summary>
+    public string? LastAuditPath { get; private set; }
     public bool Running => State is not (BuyState.Idle or BuyState.Done or BuyState.Error);
+
+    /// <summary>Held mid-route with everything intact — the plan, the stop, the bought counts.</summary>
+    public bool IsPaused => State == BuyState.Paused;
+    public string PauseReason { get; private set; } = string.Empty;
     public bool DryRun { get; private set; }
 
     private BuyPlanResult? _plan;
@@ -51,6 +65,8 @@ public sealed class BuyRunner
     private string _itemName = string.Empty;
     private long _cap;
     private bool _capped;
+    private string _capReason = string.Empty;
+    private int _orderTotal;
     private int _wantUnits;
     private bool _hqOnly;
 
@@ -61,6 +77,7 @@ public sealed class BuyRunner
     private int _lastListingCount;
     private bool _resultsClosed;
     private bool _announcedManualPickup;
+    private int _resumeItemIdx = -1;
     private int _blindGuardHits;
     private long _gilAtStart;
     private long _expectedTotal;
@@ -93,6 +110,9 @@ public sealed class BuyRunner
         Log(DryRun
             ? $"DRY RUN — no gil will be spent. {plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s)."
             : $"Buying {plan.GrandUnits} unit(s) across {plan.Stops.Count} world(s) for about {plan.GrandTotal:N0}g.");
+        Note(AuditKind.RunStart,
+            $"{(DryRun ? "Dry run" : "Live run")} — {plan.Stops.Count} stop(s), {plan.GrandUnits} unit(s), planned {plan.GrandTotal:N0}g, starting gil {_gilAtStart:N0}",
+            expected: plan.GrandTotal);
 
         State = BuyState.NextStop;
     }
@@ -113,6 +133,8 @@ public sealed class BuyRunner
         _itemName = string.Empty;
         _cap = 0;
         _capped = true;
+        _capReason = string.Empty;
+        _orderTotal = 0;
         _wantUnits = 0;
         _hqOnly = false;
 
@@ -127,6 +149,10 @@ public sealed class BuyRunner
         _resultsClosed = false;
         _blindGuardHits = 0;
         _announcedManualPickup = false;
+        _resumeItemIdx = -1;
+        PauseReason = string.Empty;
+        Audit.Clear();
+        LastAuditPath = null;
         _ticks = 0;
         _deadline = 0;
 
@@ -136,9 +162,69 @@ public sealed class BuyRunner
         _finishAfterClose = false;
     }
 
+    /// <summary>
+    /// Hold the run where it is. Everything survives — the plan, which stop we're on, which item,
+    /// and what's been bought — so Resume picks up rather than starting over.
+    ///
+    /// The board addons are closed on the way in, because whatever you need to do to clear the
+    /// pause (empty your bags at a retainer, sell something, change a limit) means walking away
+    /// from the board. Resume re-opens it rather than assuming it's still sitting there.
+    /// </summary>
+    private void PauseRun(string reason)
+    {
+        PauseReason = reason;
+        _resumeItemIdx = Math.Max(0, _itemIdx);
+        NavmeshBridge.Stop();
+
+        if (MarketBoard.ResultsOpen) Addons.CloseAddon("ItemSearchResult");
+        if (MarketBoard.BoardOpen) Addons.CloseAddon("ItemSearch");
+
+        State = BuyState.Paused;
+        Status = $"Paused — {reason}";
+        Report.Add($"Paused: {reason}");
+        Note(AuditKind.Pause, reason, _itemName);
+        _plugin.Chat($"[Market Helper] Paused — {reason}");
+    }
+
+    /// <summary>
+    /// Carry on from where the pause happened: same world, same stop, same item. Goes back via
+    /// the board rather than resuming mid-click, so it re-finds and re-opens everything cleanly.
+    /// </summary>
+    public void Resume()
+    {
+        if (!IsPaused) return;
+
+        PauseReason = string.Empty;
+        _ticks = 0;
+        _deadline = 0;
+        _searchAttempt = 0;
+        _lastListingCount = 0;
+        _blindGuardHits = 0;
+        _resultsClosed = false;
+        _announcedManualPickup = false;
+
+        Log("Resuming.");
+        Note(AuditKind.Resume, "resumed by user", _itemName);
+        State = BuyState.FindBoard;
+    }
+
+    /// <summary>Free bag slots right now — shown next to the Resume button while paused.</summary>
+    public int FreeSlotsNow() => RetainerReader.FreePlayerBagSlots();
+
     public void Stop()
     {
         if (Running) NavmeshBridge.Stop();
+        // Bank progress before dropping the run, or a mid-route stop silently loses the
+        // deduction and the next SEND re-buys everything already in your bags.
+        if (Audit.Count > 0)
+        {
+            var spentSoFar = DryRun ? _spent : Math.Max(0, _gilAtStart - MarketBoard.Gil());
+            Note(AuditKind.Stop, $"stopped by user — {_unitsBought} unit(s), {spentSoFar:N0}g",
+                qty: _unitsBought, actual: spentSoFar);
+        }
+        UpdateListAfterRun();
+        SaveAudit();
+        PauseReason = string.Empty;
         State = BuyState.Idle;
         Status = "Stopped.";
     }
@@ -211,6 +297,7 @@ public sealed class BuyRunner
                     && !LifestreamBridge.IsBusy())
                 {
                     Log($"Arrived on {_stop.World}.");
+                    Note(AuditKind.Arrive, $"arrived on {_stop.World}");
                     Wait(1500);
                     State = BuyState.FindBoard;
                     return;
@@ -291,6 +378,13 @@ public sealed class BuyRunner
                 if (MarketBoard.BoardOpen)
                 {
                     BuildItemQueue();
+                    if (_resumeItemIdx >= 0)
+                    {
+                        // NextItem increments first, so step back one to land on the item we
+                        // paused partway through instead of restarting the whole stop.
+                        _itemIdx = _resumeItemIdx - 1;
+                        _resumeItemIdx = -1;
+                    }
                     State = BuyState.NextItem;
                     return;
                 }
@@ -324,21 +418,59 @@ public sealed class BuyRunner
 
                 var lines = _stop.Lines.Where(l => l.ItemId == _item).ToList();
                 _itemName = lines.Count > 0 ? lines[0].ItemName : ItemSearch.FindById(_item);
-                _wantUnits = lines.Sum(l => l.Quantity);
-                _hqOnly = lines.All(l => l.Hq) && lines.Count > 0;
+                _hqOnly = lines.Count > 0 && lines.All(l => l.Hq);
+
+                var cfgRow = Cfg.BuyerItems.FirstOrDefault(i => i.ItemId == _item);
+                if (cfgRow != null) _hqOnly = cfgRow.HqOnly;
+
+                // The target is the WHOLE order minus whatever the run has already bought — not
+                // this stop's allocation. The plan splits an order across the cheapest listings it
+                // found, so when an early world turns out to have fewer than promised, the
+                // shortfall has to be picked up here rather than quietly lost.
+                var allocated = lines.Sum(l => l.Quantity);
+                _orderTotal = Cfg.BuyerTopUpShortfalls
+                    ? (cfgRow?.Quantity ?? allocated)
+                    : UnitsBoughtFor(_item) + allocated;
+
+                _wantUnits = Math.Max(0, _orderTotal - UnitsBoughtFor(_item));
+                if (_wantUnits <= 0)
+                {
+                    Log($"{_itemName}: already have all {_orderTotal} — skipping here.");
+                    State = BuyState.NextItem;
+                    return;
+                }
 
                 // The cap always comes from the CONFIG row, not the plan — if you lowered your max
                 // price after scanning, the lower number wins.
-                var cfgRow = Cfg.BuyerItems.FirstOrDefault(i => i.ItemId == _item);
-                _cap = cfgRow?.EffectiveCap ?? lines.Max(l => l.UnitPrice);
                 _capped = cfgRow?.UseMaxPrice ?? true;
-                if (cfgRow != null) _hqOnly = cfgRow.HqOnly;
+                _cap = cfgRow?.EffectiveCap ?? (lines.Count > 0 ? lines.Max(l => l.UnitPrice) : long.MaxValue);
+                _capReason = _capped ? "your cap" : string.Empty;
+
+                // Safety rail on an uncapped top-up: buying beyond the plan's allocation means
+                // buying listings the plan didn't price in, so refuse to go far past the dearest
+                // price it did plan for. Without this, "buy 50, no cap" can quietly spend many
+                // times the total the plan showed you.
+                if (!_capped && Cfg.BuyerTopUpMaxOverPlanPercent > 0)
+                {
+                    var plannedMax = PlannedMaxUnitPrice(_item);
+                    if (plannedMax > 0)
+                    {
+                        _cap = (long)(plannedMax * (1.0 + Cfg.BuyerTopUpMaxOverPlanPercent / 100.0));
+                        _capReason = $"plan +{Cfg.BuyerTopUpMaxOverPlanPercent}%";
+                    }
+                }
 
                 _buysThisItem = 0;
                 _lastListingCount = 0;
-                Log(_capped
-                    ? $"{_itemName}: want {_wantUnits} unit(s) at or under {_cap:N0}g each."
-                    : $"{_itemName}: want the {_wantUnits} cheapest unit(s) (no price cap).");
+                var shortfall = allocated > 0 && _wantUnits > allocated;
+                Log(_cap == long.MaxValue
+                    ? $"{_itemName}: want {_wantUnits} more unit(s) (no price cap)."
+                    : $"{_itemName}: want {_wantUnits} more unit(s) at or under {_cap:N0}g each ({_capReason})."
+                      + (shortfall ? $" Topping up — this stop was only allocated {allocated}." : ""));
+                Note(AuditKind.Item,
+                    (_cap == long.MaxValue ? "no price cap" : $"ceiling {_cap:N0}g ({_capReason})")
+                    + (shortfall ? $"; topping up shortfall, allocated {allocated}" : ""),
+                    _itemName, _wantUnits);
                 State = BuyState.Search;
                 return;
             }
@@ -440,6 +572,7 @@ public sealed class BuyRunner
                         return;
                     }
                     Log($"{_itemName}: no search result on this board — skipping.");
+                    Note(AuditKind.Skip, "no search result on this board", _itemName);
                     State = BuyState.NextItem;
                     return;
                 }
@@ -512,6 +645,7 @@ public sealed class BuyRunner
                     // The diagnostic goes in the message itself — a bare "never loaded" costs a
                     // whole extra test run to explain.
                     Log($"{_itemName}: listings never loaded — skipping. [{MarketBoard.ListingsDiagnostic(_item)}]");
+                    Note(AuditKind.Problem, $"listings never loaded — {MarketBoard.ListingsDiagnostic(_item)}", _itemName);
                     State = BuyState.NextItem;
                     return;
                 }
@@ -524,12 +658,12 @@ public sealed class BuyRunner
                 if (_buysThisItem >= 40) { Log($"{_itemName}: purchase cap for one item reached — moving on."); State = BuyState.NextItem; return; }
 
                 var boughtSoFar = UnitsBoughtFor(_item);
-                var remaining = _wantUnits - boughtSoFar;
+                var remaining = _orderTotal - boughtSoFar;
                 if (remaining <= 0)
                 {
                     Log(DryRun
-                        ? $"{_itemName}: dry run complete for this stop ({boughtSoFar} unit(s) accounted for)."
-                        : $"{_itemName}: bought all {boughtSoFar} unit(s) needed here.");
+                        ? $"{_itemName}: dry run complete ({boughtSoFar} of {_orderTotal} accounted for)."
+                        : $"{_itemName}: order complete ({boughtSoFar} of {_orderTotal}).");
                     State = BuyState.NextItem;
                     return;
                 }
@@ -538,9 +672,7 @@ public sealed class BuyRunner
                 var free = RetainerReader.FreePlayerBagSlots();
                 if (free >= 0 && free < Math.Max(1, Cfg.BuyerMinFreeSlots))
                 {
-                    Log($"Only {free} free bag slot(s) left — stopping before the bags fill.");
-                    State = BuyState.CloseBoard;
-                    _finishAfterClose = true;
+                    PauseRun($"Bags are full ({free} free slot(s)). Make room, then press Resume.");
                     return;
                 }
 
@@ -553,9 +685,12 @@ public sealed class BuyRunner
 
                 if (listings.Count == 0)
                 {
-                    Log(_capped
-                        ? $"{_itemName}: nothing left at or under {_cap:N0}g here ({boughtSoFar}/{_wantUnits} bought)."
-                        : $"{_itemName}: no more listings here ({boughtSoFar}/{_wantUnits} bought).");
+                    Log(_cap == long.MaxValue
+                        ? $"{_itemName}: no more listings here ({boughtSoFar}/{_orderTotal} bought overall)."
+                        : $"{_itemName}: nothing left at or under {_cap:N0}g here ({boughtSoFar}/{_orderTotal} bought overall).");
+                    Note(AuditKind.Skip, _cap == long.MaxValue
+                        ? $"no more listings — {boughtSoFar}/{_orderTotal} overall"
+                        : $"nothing at or under {_cap:N0}g ({_capReason}) — {boughtSoFar}/{_orderTotal} overall", _itemName);
                     State = BuyState.NextItem;
                     return;
                 }
@@ -595,23 +730,21 @@ public sealed class BuyRunner
                 var gil = MarketBoard.Gil();
                 if (gil - _expectedTotal < Cfg.BuyerGilReserve)
                 {
-                    Log($"Stopping: buying that would drop you below your {Cfg.BuyerGilReserve:N0}g reserve.");
-                    State = BuyState.CloseBoard;
-                    _finishAfterClose = true;
+                    PauseRun($"That purchase would drop you below your {Cfg.BuyerGilReserve:N0}g reserve. Top up or lower the reserve, then press Resume.");
                     return;
                 }
                 var spentSoFar = Math.Max(0, _gilAtStart - gil);
                 if (Cfg.BuyerMaxSpendPerRun > 0 && spentSoFar + _expectedTotal > Cfg.BuyerMaxSpendPerRun)
                 {
-                    Log($"Stopping: per-run spend limit of {Cfg.BuyerMaxSpendPerRun:N0}g would be exceeded.");
-                    State = BuyState.CloseBoard;
-                    _finishAfterClose = true;
+                    PauseRun($"Per-run spend limit of {Cfg.BuyerMaxSpendPerRun:N0}g reached. Raise it, then press Resume.");
                     return;
                 }
 
                 if (DryRun)
                 {
                     Log($"[dry run] would buy {pick.Quantity}x {_itemName}{(pick.Hq ? " (HQ)" : "")} at {pick.UnitPrice:N0}g = {pick.Total:N0}g from {pick.Seller}.");
+                    Note(AuditKind.DryBuy, $"would buy from {pick.Seller}{(pick.Hq ? " (HQ)" : "")}",
+                        _itemName, pick.Quantity, pick.UnitPrice, pick.Total);
                     _simulated.Add(SimKey(pick));
                     _unitsBought += pick.Quantity;
                     _spent += pick.Total;
@@ -657,6 +790,8 @@ public sealed class BuyRunner
                 if (!ConfirmMatches(text, out var reason))
                 {
                     MarketBoard.AnswerConfirm(false);
+                    Note(AuditKind.Refused, $"answered No — {reason}. Dialog: {Trim(text)}",
+                        _itemName, _expectedQty, 0, _expectedTotal);
                     SetError($"Purchase confirmation didn't match ({reason}). Answered No and stopped. Dialog said: {Trim(text)}");
                     return;
                 }
@@ -680,6 +815,10 @@ public sealed class BuyRunner
                     RecordBought(_item, _expectedQty);
                     _buysThisItem++;
                     Log($"Bought {_expectedQty}x {_itemName} for {cost:N0}g.");
+                    Note(AuditKind.Purchase, $"gil {_gilBeforeBuy:N0} -> {gil:N0}",
+                        _itemName, _expectedQty,
+                        _expectedQty > 0 ? _expectedTotal / _expectedQty : _expectedTotal,
+                        _expectedTotal, cost);
                     _ticks = 0;
                     Wait(700);
                     State = BuyState.PickListing;
@@ -697,6 +836,9 @@ public sealed class BuyRunner
                 Wait(300);
                 return;
             }
+
+            case BuyState.Paused:
+                return;   // held until Resume() or Stop()
 
             case BuyState.CloseBoard:
             {
@@ -769,12 +911,49 @@ public sealed class BuyRunner
     private static string SimKey(MarketBoard.BoardListing l)
         => $"{l.Index}|{l.UnitPrice}|{l.Quantity}|{l.Seller}";
 
+    /// <summary>
+    /// Items to try at this stop: the ones the plan allocated here, PLUS any item still short of
+    /// its order that the scan saw listed on this world at all.
+    ///
+    /// That second group is the point. The plan spreads an order over the globally cheapest
+    /// listings, so a world holding 40 of something may have been allocated 5 — or none. Without
+    /// this, a shortfall from an earlier world could never be made up even though the stock is
+    /// sitting right here.
+    /// </summary>
     private void BuildItemQueue()
     {
-        _itemQueue = _stop == null
-            ? new List<uint>()
-            : _stop.Lines.Select(l => l.ItemId).Distinct().ToList();
+        if (_stop == null) { _itemQueue = new List<uint>(); _itemIdx = -1; return; }
+
+        var queue = _stop.Lines.Select(l => l.ItemId).Distinct().ToList();
+
+        if (Cfg.BuyerTopUpShortfalls && _plan != null)
+        {
+            foreach (var summary in _plan.Items)
+            {
+                if (queue.Contains(summary.ItemId)) continue;
+
+                var target = Cfg.BuyerItems.FirstOrDefault(i => i.ItemId == summary.ItemId)?.Quantity
+                             ?? summary.Requested;
+                if (UnitsBoughtFor(summary.ItemId) >= target) continue;
+                if (!summary.AvailableByWorld.ContainsKey(_stop.World)) continue;
+
+                queue.Add(summary.ItemId);
+            }
+        }
+
+        _itemQueue = queue;
         _itemIdx = -1;
+    }
+
+    /// <summary>Dearest unit price the plan actually budgeted for this item, across all stops.</summary>
+    private long PlannedMaxUnitPrice(uint itemId)
+    {
+        if (_plan == null) return 0;
+        long max = 0;
+        foreach (var stop in _plan.Stops)
+            foreach (var line in stop.Lines)
+                if (line.ItemId == itemId && line.UnitPrice > max) max = line.UnitPrice;
+        return max;
     }
 
     /// <summary>
@@ -870,6 +1049,11 @@ public sealed class BuyRunner
     private void Finish()
     {
         UpdateListAfterRun();
+        var finalSpend = DryRun ? _spent : Math.Max(0, _gilAtStart - MarketBoard.Gil());
+        Note(AuditKind.Finish,
+            $"{(DryRun ? "dry run" : "run")} complete — {_unitsBought} unit(s), {finalSpend:N0}g, ending gil {MarketBoard.Gil():N0}",
+            qty: _unitsBought, actual: finalSpend);
+        SaveAudit();
 
         if (Cfg.BuyerReturnHome && !DryRun) { State = BuyState.ReturnHome; return; }
         State = BuyState.Done;
@@ -960,6 +1144,32 @@ public sealed class BuyRunner
         }
         catch { }
         _learnHooked = false;
+    }
+
+    private void Note(AuditKind kind, string detail, string item = "", int qty = 0,
+                      long unit = 0, long expected = 0, long actual = 0)
+    {
+        if (Audit.Count > 4000) return;   // a runaway run must not eat memory
+        Audit.Add(new BuyAuditEntry
+        {
+            Kind = kind,
+            World = _stop?.World ?? WorldInfo.CurrentWorld(),
+            DataCenter = _stop?.DataCenter ?? string.Empty,
+            Item = item,
+            Quantity = qty,
+            UnitPrice = unit,
+            Expected = expected,
+            Actual = actual,
+            Detail = detail,
+        });
+    }
+
+    private void SaveAudit()
+    {
+        if (!Cfg.BuyerWriteAuditLog) return;
+        LastAuditPath = BuyAuditWriter.Save(Audit, DryRun);
+        if (LastAuditPath != null)
+            Log($"Audit log saved: {LastAuditPath}");
     }
 
     private void Log(string msg)

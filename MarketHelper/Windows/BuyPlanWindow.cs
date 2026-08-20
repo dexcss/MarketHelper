@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
@@ -73,6 +74,11 @@ public sealed class BuyPlanWindow : Window
             if (ImGui.Button("SEND", new Vector2(SW(160), 0)))
                 runner.Start(plan, Cfg.BuyerDryRun);
         }
+        if (runner.IsPaused)
+        {
+            ImGui.SameLine(0, SW(8));
+            if (ImGui.Button("RESUME", new Vector2(SW(100), 0))) runner.Resume();
+        }
         if (runner.Running)
         {
             ImGui.SameLine(0, SW(8));
@@ -81,7 +87,12 @@ public sealed class BuyPlanWindow : Window
         ImGui.SameLine(0, SW(8));
         ImGui.TextColored(Cfg.BuyerDryRun ? Blue : Gold, Cfg.BuyerDryRun ? "dry run" : "LIVE — will spend gil");
 
-        if (runner.Running || runner.State == BuyState.Error || runner.State == BuyState.Done)
+        if (runner.IsPaused)
+        {
+            Dummy(2f);
+            WrapText(Gold, $"PAUSED — {runner.PauseReason}");
+        }
+        else if (runner.Running || runner.State == BuyState.Error || runner.State == BuyState.Done)
         {
             Dummy(2f);
             WrapText(runner.State == BuyState.Error ? Red : runner.Running ? Gold : Green, runner.Status);
@@ -104,6 +115,11 @@ public sealed class BuyPlanWindow : Window
             if (ImGui.BeginTabItem($"Log ({runner.Report.Count})"))
             {
                 DrawLog();
+                ImGui.EndTabItem();
+            }
+            if (ImGui.BeginTabItem($"Audit ({runner.Audit.Count})"))
+            {
+                DrawAudit();
                 ImGui.EndTabItem();
             }
             ImGui.EndTabBar();
@@ -252,6 +268,115 @@ public sealed class BuyPlanWindow : Window
         {
             foreach (var line in report)
                 WrapText(line.StartsWith("[dry run]", StringComparison.Ordinal) ? Blue : Grey, line);
+        }
+        ImGui.EndChild();
+    }
+
+    private bool _auditPurchasesOnly;
+    private bool _auditProblemsOnly;
+
+    /// <summary>
+    /// The run's audit trail. Every purchase carries what we EXPECTED to pay next to what
+    /// actually left the wallet, and the difference — which is the whole point: a purchase that
+    /// cost more than planned is visible here instead of buried in a chat scrollback.
+    /// </summary>
+    private void DrawAudit()
+    {
+        var runner = _plugin.Buy;
+        if (runner.Audit.Count == 0)
+        {
+            ImGui.TextColored(Grey, "Nothing yet — the audit trail is written as the run goes.");
+            return;
+        }
+
+        var purchases = runner.Audit.Where(e => e.Kind == AuditKind.Purchase).ToList();
+        var flagged = runner.Audit.Count(e => e.Flagged);
+        var problems = runner.Audit.Count(e => e.Kind is AuditKind.Problem or AuditKind.Refused);
+
+        var units = purchases.Sum(e => e.Quantity);
+        var spent = purchases.Sum(e => e.Actual);
+        var planned = purchases.Sum(e => e.Expected);
+
+        ImGui.TextColored(Green, $"{purchases.Count} purchase(s), {units} unit(s), {spent:N0}g spent (planned {planned:N0}g).");
+        if (flagged > 0) ImGui.TextColored(Red, $"{flagged} purchase(s) cost noticeably more than planned — shown in red.");
+        if (problems > 0) ImGui.TextColored(Gold, $"{problems} problem(s) or refused purchase(s) recorded.");
+
+        Dummy(2f);
+        ImGui.Checkbox("Purchases only", ref _auditPurchasesOnly);
+        ImGui.SameLine(0, SW(10));
+        ImGui.Checkbox("Problems only", ref _auditProblemsOnly);
+        ImGui.SameLine(0, SW(10));
+        if (ImGui.Button("Save now##auditsave"))
+        {
+            var path = BuyAuditWriter.Save(runner.Audit, runner.DryRun);
+            _plugin.Chat(path != null
+                ? $"[Market Helper] Audit log saved: {path}"
+                : "[Market Helper] Couldn't write the audit log.");
+        }
+        ImGui.SameLine(0, SW(6));
+        if (ImGui.Button("Open folder##auditfolder"))
+        {
+            try
+            {
+                var dir = BuyAuditWriter.FolderPath();
+                System.IO.Directory.CreateDirectory(dir);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true });
+            }
+            catch (Exception ex) { _plugin.Chat($"[Market Helper] Couldn't open the folder: {ex.Message}"); }
+        }
+
+        if (runner.LastAuditPath != null)
+        {
+            Dummy(2f);
+            WrapText(Grey, runner.LastAuditPath);
+        }
+
+        Dummy(4f);
+        if (ImGui.BeginChild("##auditrows", new Vector2(0, 0), true))
+        {
+            if (ImGui.BeginTable("##audittable", 7, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY))
+            {
+                ImGui.TableSetupColumn("Time", ImGuiTableColumnFlags.WidthFixed, SW(60));
+                ImGui.TableSetupColumn("What", ImGuiTableColumnFlags.WidthFixed, SW(70));
+                ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, SW(90));
+                ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 1.6f);
+                ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, SW(40));
+                ImGui.TableSetupColumn("Planned / Paid", ImGuiTableColumnFlags.WidthFixed, SW(150));
+                ImGui.TableSetupColumn("Detail", ImGuiTableColumnFlags.WidthStretch, 1.8f);
+                ImGui.TableHeadersRow();
+
+                foreach (var e in runner.Audit)
+                {
+                    if (_auditPurchasesOnly && e.Kind is not (AuditKind.Purchase or AuditKind.DryBuy)) continue;
+                    if (_auditProblemsOnly && e.Kind is not (AuditKind.Problem or AuditKind.Refused or AuditKind.Skip) && !e.Flagged) continue;
+
+                    var colour = e.Flagged || e.Kind == AuditKind.Refused ? Red
+                        : e.Kind == AuditKind.Problem ? Red
+                        : e.Kind == AuditKind.Skip ? Gold
+                        : e.Kind == AuditKind.Purchase ? Green
+                        : Grey;
+
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn(); ImGui.TextColored(Grey, e.Time.ToString("HH:mm:ss"));
+                    ImGui.TableNextColumn(); ImGui.TextColored(colour, e.Kind.ToString());
+                    ImGui.TableNextColumn(); ImGui.TextUnformatted(e.World);
+                    ImGui.TableNextColumn(); ImGui.TextUnformatted(e.Item);
+                    ImGui.TableNextColumn(); ImGui.TextUnformatted(e.Quantity > 0 ? e.Quantity.ToString() : "");
+
+                    ImGui.TableNextColumn();
+                    if (e.Kind == AuditKind.Purchase)
+                    {
+                        var diff = e.Difference;
+                        var sign = diff > 0 ? "+" : "";
+                        ImGui.TextColored(e.Flagged ? Red : Green, $"{e.Expected:N0} / {e.Actual:N0} ({sign}{diff:N0})");
+                    }
+                    else if (e.Expected > 0) ImGui.TextColored(Grey, $"{e.Expected:N0}");
+                    else ImGui.TextUnformatted("");
+
+                    ImGui.TableNextColumn(); ImGui.TextColored(Grey, e.Detail);
+                }
+                ImGui.EndTable();
+            }
         }
         ImGui.EndChild();
     }

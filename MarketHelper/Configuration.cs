@@ -193,6 +193,19 @@ public class Configuration : IPluginConfiguration
     public bool BuyerDcPriorityEnabled { get; set; } = false;
     public List<string> BuyerDcPriority { get; set; } = new();
 
+    // Carry a shortfall forward. If an early world had fewer listings than the scan promised, later
+    // stops buy the difference instead of sticking to their own allocation.
+    public bool BuyerTopUpShortfalls { get; set; } = true;
+
+    // Safety rail for topping up an UNCAPPED item: never pay more than the dearest price the plan
+    // had for it, plus this percentage. 0 disables the rail. Only applies when the item has no
+    // price cap of its own — with a cap, the cap governs.
+    public int BuyerTopUpMaxOverPlanPercent { get; set; } = 50;
+
+    // Write a CSV audit trail of every run to the plugin config folder (buyer-logs), so a run can
+    // be checked over afterwards instead of scrolled back through in chat.
+    public bool BuyerWriteAuditLog { get; set; } = true;
+
     // Politeness gap between Universalis calls when scanning several DCs at once.
     public int BuyerScanDelayMs { get; set; } = 120;
 

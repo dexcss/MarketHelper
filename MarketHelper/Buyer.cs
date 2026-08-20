@@ -59,6 +59,13 @@ public sealed class ItemSummary
     public readonly Dictionary<string, (int Units, long Cheapest)> PerWorld = new();
 
     /// <summary>
+    /// Everything the scan saw on each world for this item, whether or not the plan allocated it.
+    /// The plan spreads an order across the cheapest listings globally, so a world can hold far
+    /// more than it was given — this is what lets a later stop top up an earlier shortfall.
+    /// </summary>
+    public readonly Dictionary<string, int> AvailableByWorld = new();
+
+    /// <summary>
     /// The N cheapest listings in scope, INCLUDING ones above your cap. This is what tells you
     /// "nothing at 1,000g, but here's what it actually costs" instead of just reporting nothing.
     /// </summary>
@@ -337,6 +344,14 @@ public sealed class Buyer
                             Quantity = l.Quantity,
                             Hq = l.Hq,
                         });
+                }
+
+                foreach (var l in listings)
+                {
+                    if (cap != long.MaxValue && l.PricePerUnit > cap) continue;
+                    var w = l.World;
+                    if (string.IsNullOrWhiteSpace(w)) continue;
+                    summary.AvailableByWorld[w] = (summary.AvailableByWorld.TryGetValue(w, out var have) ? have : 0) + l.Quantity;
                 }
 
                 var remaining = item.Quantity;
