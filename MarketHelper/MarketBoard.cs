@@ -103,7 +103,7 @@ public static unsafe class MarketBoard
     /// every step and whether it succeeded, which is what the run log prints with Debug on —
     /// so a failure says WHICH part failed instead of just hanging.
     /// </summary>
-    public static string Search(string itemName, bool partialMatch)
+    public static string TypeSearch(string itemName, bool partialMatch)
     {
         var addon = GetItemSearch();
         if (addon == null) return "no ItemSearch addon";
@@ -129,14 +129,41 @@ public static unsafe class MarketBoard
                 catch (Exception ex) { steps.Add($"input FAILED({ex.GetType().Name})"); }
             }
             else steps.Add("input=null");
+
+            // THE one that actually goes to the server. The addon's SearchText fields are the
+            // UI's copy; AgentItemSearch's StringData->SearchParam is what the search request
+            // reads. Setting only the addon side types the name and searches for nothing, which
+            // is exactly the "No matching items" we saw.
+            try
+            {
+                var agent = AgentItemSearch.Instance();
+                if (agent == null) steps.Add("agent=null");
+                else if (agent->StringData == null) steps.Add("agentString=null");
+                else { agent->StringData->SearchParam.SetString(p); steps.Add("agentParam"); }
+            }
+            catch (Exception ex) { steps.Add($"agentParam FAILED({ex.GetType().Name})"); }
         }
 
         try { addon->PartialMatch = partialMatch; steps.Add($"partial={partialMatch}"); }
         catch (Exception ex) { steps.Add($"partial FAILED({ex.GetType().Name})"); }
 
-        steps.Add(RunSearchOnly(true));
+        // Keep the visible checkbox in step with the flag, so what you see matches what runs.
+        try
+        {
+            if (addon->PartialSearchCheckBox != null)
+            {
+                addon->PartialSearchCheckBox->AtkComponentButton.IsChecked = partialMatch;
+                steps.Add("partialBox");
+            }
+        }
+        catch (Exception ex) { steps.Add($"partialBox FAILED({ex.GetType().Name})"); }
+
         return string.Join(", ", steps);
     }
+
+    /// <summary>Type the name and immediately run the search. Used by the retry ladder.</summary>
+    public static string Search(string itemName, bool partialMatch)
+        => TypeSearch(itemName, partialMatch) + ", " + RunSearchOnly(true);
 
     /// <summary>
     /// Fire the search again without retyping. Used by the retry ladder: the text is already in
@@ -342,6 +369,8 @@ public static unsafe class MarketBoard
         }
         else
         {
+            var param = agent->StringData == null ? "(null)" : agent->StringData->SearchParam.ToString();
+            lines.Add($"AgentItemSearch: searchParam=\"{param}\"");
             lines.Add($"AgentItemSearch: pageItems={agent->ListingPageItemCount} page={agent->ListingCurrentPage}/{agent->ListingPageCount} resultItemId={agent->ResultItemId} selectedIdx={agent->ResultSelectedIndex}");
             var count = (int)Math.Min(agent->ListingPageItemCount, (uint)agent->ListingPageItemIds.Length);
             for (var i = 0; i < count && i < 12; i++)

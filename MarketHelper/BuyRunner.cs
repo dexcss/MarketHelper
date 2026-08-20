@@ -8,7 +8,7 @@ namespace MarketHelper;
 public enum BuyState
 {
     Idle, NextStop, Travel, WaitTravel, FindBoard, WalkBoard, InteractBoard, WaitBoard,
-    NextItem, Search, WaitResults, WaitManualSearch, SelectRow, WaitListings, PickListing,
+    NextItem, Search, WaitTyped, WaitResults, WaitManualSearch, SelectRow, WaitListings, PickListing,
     WaitConfirm, WaitPurchase, CloseBoard, ReturnHome, WaitReturn, Done, Error,
 }
 
@@ -289,13 +289,26 @@ public sealed class BuyRunner
             case BuyState.Search:
             {
                 if (!MarketBoard.BoardOpen) { State = BuyState.FindBoard; return; }
-                Status = $"Searching for {_itemName}...";
-                var detail = MarketBoard.Search(_itemName, Cfg.BuyerPartialMatch);
-                if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: search -> {detail}");
+                Status = $"Typing {_itemName}...";
+                var detail = MarketBoard.TypeSearch(_itemName, Cfg.BuyerPartialMatch);
+                if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: typed -> {detail}");
                 if (detail.Contains("FAILED", StringComparison.Ordinal))
-                    Log($"{_itemName}: search step reported a problem — {detail}");
+                    Log($"{_itemName}: a search field wouldn't set — {detail}");
                 _ticks = 0;
                 _searchAttempt = 0;
+                // Deliberate gap between typing and searching: firing the search in the same frame
+                // as the text write can search on a half-set field and come back "No matching items".
+                Wait(Math.Max(200, Cfg.BuyerSearchTypeDelayMs));
+                State = BuyState.WaitTyped;
+                return;
+            }
+
+            case BuyState.WaitTyped:
+            {
+                Status = $"Searching for {_itemName}...";
+                var ran = MarketBoard.RunSearchOnly(true);
+                if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: {ran}");
+                _ticks = 0;
                 Wait(Math.Max(600, Cfg.SearchPacingMs));
                 State = BuyState.WaitResults;
                 return;
@@ -338,9 +351,11 @@ public sealed class BuyRunner
                 if (_ticks == 14 && _searchAttempt == 1)
                 {
                     _searchAttempt = 2;
-                    var d = MarketBoard.Search(_itemName, Cfg.BuyerPartialMatch);
+                    var d = MarketBoard.TypeSearch(_itemName, Cfg.BuyerPartialMatch);
                     if (Cfg.Debug) _plugin.Chat($"[Market Helper] Buyer: retry 2 (retype) -> {d}");
-                    Wait(400);
+                    _ticks = 0;
+                    Wait(Math.Max(200, Cfg.BuyerSearchTypeDelayMs));
+                    State = BuyState.WaitTyped;
                     return;
                 }
                 if (_ticks == 24 && _searchAttempt == 2)

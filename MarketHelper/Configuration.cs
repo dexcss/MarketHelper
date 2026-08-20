@@ -186,6 +186,10 @@ public class Configuration : IPluginConfiguration
     // Extra market-board object name, if your client language isn't one of the built-in four.
     public string BuyerBoardNameOverride { get; set; } = "";
 
+    // Gap between typing the item name into the board and firing the search. Firing in the same
+    // frame as the text write can search a half-set field and come back "No matching items".
+    public int BuyerSearchTypeDelayMs { get; set; } = 500;
+
     // Tick the board's "Partial Match" box when searching. On by default: exact-name matching is
     // fussier about punctuation and localisation than it looks.
     public bool BuyerPartialMatch { get; set; } = true;

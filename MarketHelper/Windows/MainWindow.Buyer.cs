@@ -389,6 +389,12 @@ public partial class MainWindow
         var nav = Cfg.BuyerUseNavmesh;
         if (ImGui.Checkbox("Let vnavmesh walk me to the market board", ref nav)) { Cfg.BuyerUseNavmesh = nav; Cfg.Save(); }
 
+        var typeDelay = Cfg.BuyerSearchTypeDelayMs;
+        ImGui.SetNextItemWidth(SW(180));
+        if (ImGui.InputInt("Delay after typing before searching (ms)", ref typeDelay, 100)) { Cfg.BuyerSearchTypeDelayMs = Math.Clamp(typeDelay, 0, 5000); Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("The name is typed, then the search fires a moment later. Raise this if searches come back empty for items you know are listed.");
+
         var partial = Cfg.BuyerPartialMatch;
         if (ImGui.Checkbox("Use the board's Partial Match when searching", ref partial)) { Cfg.BuyerPartialMatch = partial; Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
