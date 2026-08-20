@@ -28,6 +28,8 @@ public sealed class Plugin : IDalamudPlugin
     public GatherRunner Gatherer { get; }
     public ManualTransfer Manual { get; }
     public AutoRetainerBridge ArBridge { get; }
+    public Buyer Buyer { get; }
+    public BuyRunner Buy { get; }
 
     // Session-only Lister items (in memory; cleared automatically on plugin reload / game close,
     // and via the manual "Clear session" button). Separate from Config.ListerItems (permanent).
@@ -53,6 +55,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly WindowSystem _windows = new("MarketHelper");
     private readonly MainWindow _mainWindow;
 
+    /// <summary>The Buyer's scan-result popup. Opened from the Buyer tab after a scan.</summary>
+    public BuyPlanWindow PlanWindow { get; private set; } = null!;
+
     private const string Command = "/undercut";
     private static readonly string[] OpenAliases = { "/markethelp", "/market", "/mh" };
 
@@ -68,14 +73,18 @@ public sealed class Plugin : IDalamudPlugin
         Gatherer = new GatherRunner(this);
         Manual = new ManualTransfer(this);
         ArBridge = new AutoRetainerBridge(this);
+        Buyer = new Buyer(this);
+        Buy = new BuyRunner(this);
         if (Config.AutoRetainerIntegration) ArBridge.Enable();
 
         _mainWindow = new MainWindow(this);
         _windows.AddWindow(_mainWindow);
+        PlanWindow = new BuyPlanWindow(this);
+        _windows.AddWindow(PlanWindow);
 
         CommandManager.AddHandler(Command, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open Market Helper. Subcommands: run / stop / now / dump.",
+            HelpMessage = "Open Market Helper. Subcommands: run / stop / now / dump / buydump.",
         });
         foreach (var alias in OpenAliases)
         {
@@ -91,7 +100,7 @@ public sealed class Plugin : IDalamudPlugin
         Framework.Update += OnFrameworkUpdate;
     }
 
-    private void OnFrameworkUpdate(IFramework _) { Nav.Tick(); Lister.Tick(); Gatherer.Tick(); Manual.Tick(); }
+    private void OnFrameworkUpdate(IFramework _) { Nav.Tick(); Lister.Tick(); Gatherer.Tick(); Manual.Tick(); Buy.Tick(); }
 
     private void OnCommand(string command, string args)
     {
@@ -109,6 +118,12 @@ public sealed class Plugin : IDalamudPlugin
         {
             Listener.PriceOpenItemNow();
             _mainWindow.IsOpen = true;
+        }
+        else if (args == "buydump")
+        {
+            // Diagnostic for the Buyer: dump market board / search agent / listing proxy state.
+            foreach (var line in MarketBoard.Dump())
+                Chat($"[Market Helper] {line}");
         }
         else if (args == "dump")
         {

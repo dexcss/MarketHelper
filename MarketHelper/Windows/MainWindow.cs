@@ -56,6 +56,11 @@ public partial class MainWindow : Window
                 DrawGathererTab();
                 ImGui.EndTabItem();
             }
+            if (ImGui.BeginTabItem("Buyer"))
+            {
+                DrawBuyerTab();
+                ImGui.EndTabItem();
+            }
             ImGui.EndTabBar();
         }
     }

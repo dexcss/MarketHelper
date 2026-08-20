@@ -13,6 +13,17 @@ public class ItemOverride
     public int? Default { get; set; }
 }
 
+/// <summary>One row of the Buyer's shopping list.</summary>
+[Serializable]
+public class BuyerItem
+{
+    public uint ItemId { get; set; }
+    public int Quantity { get; set; } = 1;
+    public long MaxPrice { get; set; } = 1000;   // never pay more than this PER UNIT
+    public bool HqOnly { get; set; }
+    public bool Enabled { get; set; } = true;
+}
+
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
@@ -122,6 +133,45 @@ public class Configuration : IPluginConfiguration
     // Outlier protection: if the cheapest listing is more than this % below the NEXT listing,
     // treat it as a lone undercut/troll and price against the next one instead. 0 = disabled.
     public float ListerOutlierGapPercent { get; set; } = 15.0f;
+
+    // --- Buyer settings ---
+    // Shopping list: what to buy, how many, and the hard per-unit price ceiling for each.
+    public List<BuyerItem> BuyerItems { get; set; } = new();
+
+    // Dry run is ON by default and deliberately so: the Buyer spends real gil, and the first run
+    // on any new setup should prove the route and the prices without touching the wallet.
+    public bool BuyerDryRun { get; set; } = true;
+
+    // Scan scope. Default is your own data center; region widens it (slower, more travel).
+    public bool BuyerScanRegion { get; set; } = false;
+    public string BuyerScopeOverride { get; set; } = "";     // exact DC/region name, blank = auto
+
+    // A market listing must be bought whole. When on, a stack larger than what you still need is
+    // still bought; when off, oversized stacks are skipped.
+    public bool BuyerAllowOvershoot { get; set; } = true;
+
+    // Hard wallet guards. The reserve is never spent below; the per-run ceiling caps one SEND.
+    public long BuyerGilReserve { get; set; } = 100_000;
+    public long BuyerMaxSpendPerRun { get; set; } = 0;       // 0 = no per-run limit
+
+    // Stop buying before the bags are actually full, so nothing is bought that can't be received.
+    public int BuyerMinFreeSlots { get; set; } = 3;
+
+    // Hop back to where you started once the run finishes.
+    public bool BuyerReturnHome { get; set; } = true;
+    public string BuyerHomeWorld { get; set; } = "";         // blank = world you started the run on
+
+    // Let vnavmesh walk the last stretch to a market board after a world hop.
+    public bool BuyerUseNavmesh { get; set; } = true;
+
+    // Extra market-board object name, if your client language isn't one of the built-in four.
+    public string BuyerBoardNameOverride { get; set; } = "";
+
+    // Addon callback opcodes for the two board clicks. Exposed because they're the only values in
+    // the buy path not verified against a struct — if a game patch moves them, "/undercut buydump"
+    // shows the state and these can be corrected without a rebuild.
+    public int BuyerSelectResultOpcode { get; set; } = 2;    // ItemSearch: open a search result
+    public int BuyerBuyOpcode { get; set; } = 0;             // ItemSearchResult: click a listing
 
     [NonSerialized] private IDalamudPluginInterface? pluginInterface;
 
