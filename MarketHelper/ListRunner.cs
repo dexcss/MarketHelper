@@ -45,6 +45,11 @@ public sealed class ListRunner
     private (InventoryType Type, ushort Slot)? _justListedLoc;   // where it was listed from
     private readonly Dictionary<uint, long> _runPriceCache = new();   // itemId -> listed price, this run
 
+    // Units listed per item this run, against the optional per-item listing amount. Counts UNITS,
+    // not listings, so "list 20 in lots of 6" stops at 20 rather than at 20 listings.
+    private readonly Dictionary<uint, int> _listedUnits = new();
+    private int _lastListedUnits;
+
     // 20-listing cap: how many free market slots this retainer has left this run.
     private int _slotsLeft;
     private const int MaxListingsPerRetainer = 20;
@@ -82,6 +87,8 @@ public sealed class ListRunner
         Report.Clear();
         _dryListed.Clear();
         _justListedItem = 0; _justListedLoc = null; _runPriceCache.Clear();
+        _listedUnits.Clear();
+        _lastListedUnits = 0;
         _retainerIdx = -1;
         State = ListState.FindBell;
         Status = dryRun ? "Dry run: looking for bell..." : "Listing: looking for bell...";
@@ -103,6 +110,8 @@ public sealed class ListRunner
         Report.Clear();
         _dryListed.Clear();
         _justListedItem = 0; _justListedLoc = null; _runPriceCache.Clear();
+        _listedUnits.Clear();
+        _lastListedUnits = 0;
         _ticks = 0;
         // Build this retainer's queue and free-slot count, then enter the sell screen.
         _queue.Clear();
@@ -280,6 +289,16 @@ public sealed class ListRunner
                 var item = _justListedItem;
                 _justListedItem = 0;
                 _justListedLoc = null;
+
+                // Requested amount reached — leave the rest alone, even though stock remains.
+                if (RemainingAllowance(item) <= 0)
+                {
+                    Log($"{ItemSearch.FindById(item)}: listed the {DesiredListAmount(item)} you asked for — keeping the rest.");
+                    _plugin.RemoveListerItem(item);
+                    _queue.Remove(item);
+                    State = ListState.NextItem;
+                    return;
+                }
 
                 var stacksRemain = RetainerReader.FindItemSlot(item, includeRetainer: true) != null;
                 if (!stacksRemain)
@@ -611,6 +630,7 @@ public sealed class ListRunner
     private void AfterListed()
     {
         _slotsLeft--;
+        _listedUnits[_currentItem] = ListedSoFar(_currentItem) + Math.Max(1, _lastListedUnits);
         // Record the slot we just listed so the settle check can confirm it actually cleared before
         // we look for more stacks (listing moves the item out of inventory asynchronously).
         _justListedItem = _currentItem;
@@ -748,15 +768,48 @@ public sealed class ListRunner
     /// listing a stack of 18 at a per-unit price meant for 1 is an irreversible loss, so a failed
     /// quantity is a reason to skip the item, never to carry on and hope.
     /// </summary>
+    /// <summary>
+    /// Total units to list for this item in one run. 0 (the default) means everything held.
+    /// </summary>
+    private int DesiredListAmount(uint itemId)
+        => Cfg.ListerListAmounts.TryGetValue(itemId, out var n) && n > 0 ? n : 0;
+
+    /// <summary>Units of this item already listed during this run.</summary>
+    private int ListedSoFar(uint itemId)
+        => _listedUnits.TryGetValue(itemId, out var n) ? n : 0;
+
+    /// <summary>
+    /// Units still allowed for this item, or int.MaxValue when no limit was set.
+    /// </summary>
+    private int RemainingAllowance(uint itemId)
+    {
+        var cap = DesiredListAmount(itemId);
+        return cap <= 0 ? int.MaxValue : Math.Max(0, cap - ListedSoFar(itemId));
+    }
+
     private bool ApplyStackSize(uint itemId, out string detail)
     {
         detail = string.Empty;
-        var want = DesiredStackSize(itemId);
-        if (want <= 0) return true;                       // whole stack: leave the field alone
 
         var max = Addons.ReadMaxQuantity();
+        var allowance = RemainingAllowance(itemId);
+        var want = DesiredStackSize(itemId);
+
+        // The listing amount trims the LAST listing: asking for 20 in lots of 6 gives 6, 6, 6, 2 —
+        // not 6, 6, 6, 6 and two extra sold by accident.
+        if (allowance != int.MaxValue)
+            want = want <= 0 ? allowance : Math.Min(want, allowance);
+
+        _lastListedUnits = want > 0 ? want : (max > 0 ? max : 1);
+
+        if (want <= 0) return true;                       // whole stack: leave the field alone
         if (max <= 0) return true;                        // can't read the stack: leave it as-is
-        if (want >= max) { detail = $"stack of {max}"; return true; }   // already the whole stack
+        if (want >= max)
+        {
+            _lastListedUnits = max;
+            detail = $"stack of {max}";
+            return true;                                  // already the whole stack
+        }
 
         var got = Addons.SetQuantity(want, Cfg.ListerQuantityOpcode);
         if (got != want)

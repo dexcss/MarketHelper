@@ -105,6 +105,50 @@ public static unsafe class RetainerReader
         return null;
     }
 
+    /// <summary>
+    /// Total units of an item held across the player's four bags (and optionally the open
+    /// retainer's pages). Counts QUANTITY, not slots — a stack of 18 counts as 18, which is what
+    /// the Lister needs to show "listing 20 /20".
+    ///
+    /// Only containers the game has actually loaded are counted, so with no retainer open this
+    /// reports bags alone rather than guessing.
+    /// </summary>
+    public static int CountItem(uint itemId, bool includeRetainer)
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return 0;
+
+        var containers = new List<InventoryType>
+        {
+            InventoryType.Inventory1, InventoryType.Inventory2,
+            InventoryType.Inventory3, InventoryType.Inventory4,
+        };
+        if (includeRetainer)
+        {
+            containers.Add(InventoryType.RetainerPage1);
+            containers.Add(InventoryType.RetainerPage2);
+            containers.Add(InventoryType.RetainerPage3);
+            containers.Add(InventoryType.RetainerPage4);
+            containers.Add(InventoryType.RetainerPage5);
+            containers.Add(InventoryType.RetainerPage6);
+            containers.Add(InventoryType.RetainerPage7);
+        }
+
+        var total = 0;
+        foreach (var type in containers)
+        {
+            var inv = im->GetInventoryContainer(type);
+            if (inv == null || !inv->IsLoaded) continue;
+            for (var i = 0; i < inv->Size; i++)
+            {
+                var slot = inv->GetInventorySlot(i);
+                if (slot == null) continue;
+                if (slot->ItemId == itemId) total += (int)slot->Quantity;
+            }
+        }
+        return total;
+    }
+
     /// <summary>Debug: summarize loaded RetainerPage containers and their item ids.</summary>
     public static string DebugCountRetainerInventory()
     {

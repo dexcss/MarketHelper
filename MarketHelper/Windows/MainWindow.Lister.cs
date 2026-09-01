@@ -1,4 +1,5 @@
 using System;
+using Dalamud.Interface.Textures;
 using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
@@ -184,6 +185,26 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// Item icon for a row, falling back to blank space of the same size so the columns stay
+    /// aligned when an icon can't be loaded.
+    /// </summary>
+    private static void DrawItemIcon(uint itemId, float size)
+    {
+        var icon = ItemSearch.IconId(itemId);
+        if (icon != 0)
+        {
+            try
+            {
+                var tex = Svc.Texture.GetFromGameIcon(new GameIconLookup(icon)).GetWrapOrEmpty();
+                ImGui.Image(tex.Handle, new Vector2(size, size));
+                return;
+            }
+            catch { /* fall through to the spacer */ }
+        }
+        ImGui.Dummy(new Vector2(size, size));
+    }
+
     private void DrawItemList(string title, List<uint> list, string id, bool isSession)
     {
         ImGui.Text($"{title} ({list.Count}):");
@@ -193,40 +214,74 @@ public partial class MainWindow
         }
         else
         {
-            if (ImGui.BeginChild($"##items{id}", new Vector2(0, SW(130)), true))
+            if (ImGui.BeginChild($"##items{id}", new Vector2(0, SW(170)), true))
             {
                 uint? remove = null;
-                foreach (var itemId in list)
+
+                var tflags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingFixedFit;
+                if (ImGui.BeginTable($"##listtable{id}", 5, tflags))
                 {
-                    var name = ItemSearch.FindById(itemId);
-                    if (string.IsNullOrEmpty(name)) name = $"Item #{itemId}";
+                    ImGui.TableSetupColumn("##icon", ImGuiTableColumnFlags.WidthFixed, SW(26));
+                    ImGui.TableSetupColumn("Listing", ImGuiTableColumnFlags.WidthFixed, SW(118));
+                    ImGui.TableSetupColumn("Stack size", ImGuiTableColumnFlags.WidthFixed, SW(76));
+                    ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 1f);
+                    ImGui.TableSetupColumn("##del", ImGuiTableColumnFlags.WidthFixed, SW(24));
+                    ImGui.TableHeadersRow();
 
-                    if (ImGui.SmallButton($"x##{id}rm{itemId}")) remove = itemId;
-
-                    ImGui.SameLine(0, SW(6));
-                    ImGui.TextUnformatted($"{name}  -  Stack Size:");
-
-                    // Units per listing for THIS item. 0 keeps the game's own behaviour: the whole
-                    // stack goes up as a single listing.
-                    ImGui.SameLine(0, SW(6));
-                    var per = Cfg.ListerStackSizes.TryGetValue(itemId, out var v) ? v : 0;
-                    ImGui.SetNextItemWidth(SW(74));
-                    if (ImGui.InputInt($"##{id}qty{itemId}", ref per, 1))
+                    foreach (var itemId in list)
                     {
-                        per = Math.Clamp(per, 0, 999);
-                        if (per <= 0) Cfg.ListerStackSizes.Remove(itemId);
-                        else Cfg.ListerStackSizes[itemId] = per;
-                        Cfg.Save();
-                    }
-                    if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip("How many units go in each listing.\n0 = the whole stack as one listing (default).\n1 = one listing per unit, so a stack of 18 becomes 18 listings.\nEach listing takes one of the retainer's 20 slots.");
+                        var name = ItemSearch.FindById(itemId);
+                        if (string.IsNullOrEmpty(name)) name = $"Item #{itemId}";
 
-                    if (per <= 0)
-                    {
-                        ImGui.SameLine(0, SW(6));
-                        ImGui.TextColored(Grey, "whole stack");
+                        // Units held right now. Retainer pages only count while a retainer is open.
+                        var held = RetainerReader.CountItem(itemId, includeRetainer: true);
+
+                        ImGui.TableNextRow();
+
+                        ImGui.TableNextColumn();
+                        DrawItemIcon(itemId, SW(22));
+
+                        // How many to list, then "/ held" so you can see what you have.
+                        ImGui.TableNextColumn();
+                        var amount = Cfg.ListerListAmounts.TryGetValue(itemId, out var a2) && a2 > 0 ? a2 : held;
+                        ImGui.SetNextItemWidth(SW(58));
+                        // Step 0 drops ImGui's +/- buttons — typing is quicker and the row is tighter.
+                        if (ImGui.InputInt($"##{id}amt{itemId}", ref amount, 0))
+                        {
+                            amount = Math.Clamp(amount, 0, 99999);
+                            // "All of them" is stored as absent so it stays right when the count changes.
+                            if (amount <= 0 || amount >= held) Cfg.ListerListAmounts.Remove(itemId);
+                            else Cfg.ListerListAmounts[itemId] = amount;
+                            Cfg.Save();
+                        }
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip("How many units to list in total.\nDefaults to everything you hold; lower it to keep some back.");
+                        ImGui.SameLine(0, SW(4));
+                        ImGui.TextColored(held > 0 ? Grey : Gold, $"/ {held:N0}");
+
+                        // Units per listing. 0 = the whole stack as one listing (game default).
+                        ImGui.TableNextColumn();
+                        var per = Cfg.ListerStackSizes.TryGetValue(itemId, out var v) ? v : 0;
+                        ImGui.SetNextItemWidth(SW(58));
+                        if (ImGui.InputInt($"##{id}qty{itemId}", ref per, 0))
+                        {
+                            per = Math.Clamp(per, 0, 9999);
+                            if (per <= 0) Cfg.ListerStackSizes.Remove(itemId);
+                            else Cfg.ListerStackSizes[itemId] = per;
+                            Cfg.Save();
+                        }
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip("Units in each listing.\n0 = the whole stack as one listing (default).\n1 = one listing per unit, so 18 dye becomes 18 listings.\nEach listing takes one of the retainer's 20 slots.");
+
+                        ImGui.TableNextColumn();
+                        ImGui.TextUnformatted(name);
+
+                        ImGui.TableNextColumn();
+                        if (ImGui.SmallButton($"x##{id}rm{itemId}")) remove = itemId;
                     }
+                    ImGui.EndTable();
                 }
+
                 if (remove.HasValue) { list.Remove(remove.Value); if (!isSession) Cfg.Save(); }
             }
             ImGui.EndChild();

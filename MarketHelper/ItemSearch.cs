@@ -89,6 +89,28 @@ public static class ItemSearch
         return 0;
     }
 
+    /// <summary>
+    /// Game icon id for an item, or 0 if unknown. Cached because the Lister redraws every frame
+    /// and a sheet lookup per row per frame is wasteful.
+    /// </summary>
+    private static readonly Dictionary<uint, ushort> IconCache = new();
+
+    public static ushort IconId(uint itemId)
+    {
+        if (IconCache.TryGetValue(itemId, out var cached)) return cached;
+
+        ushort icon = 0;
+        try
+        {
+            var row = Svc.Data.GetExcelSheet<Item>()?.GetRowOrDefault(itemId);
+            icon = row?.Icon ?? 0;
+        }
+        catch { icon = 0; }
+
+        IconCache[itemId] = icon;
+        return icon;
+    }
+
     // ---- Unfiltered index: ALL named items, including market-prohibited ones. Used by the Item
     // Gatherer, which just moves items between retainer and bags and doesn't care about the market.
 

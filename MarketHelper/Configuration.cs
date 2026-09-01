@@ -138,6 +138,10 @@ public class Configuration : IPluginConfiguration
     // remember a retainer only has 20 slots.
     public Dictionary<uint, int> ListerStackSizes { get; set; } = new();
 
+    // Total units to list for an item in one run, keyed by item id. Absent or 0 means "everything
+    // you're holding". Set it to hold some back — list 12 of the 20 dye and keep 8.
+    public Dictionary<uint, int> ListerListAmounts { get; set; } = new();
+
     // Callback case for the sell window's quantity field. The value is written directly too, and
     // read back before confirming, so this is belt-and-braces rather than load-bearing.
     public int ListerQuantityOpcode { get; set; } = 3;
