@@ -409,8 +409,16 @@ public sealed class ListRunner
                 // previous stack of the same 1000-item pile), reuse it — no market re-scan.
                 if (_runPriceCache.TryGetValue(_currentItem, out var cachedPrice) && cachedPrice > 0)
                 {
+                    if (!ApplyStackSize(_currentItem, out var qDetailCached))
+                    {
+                        Log($"{ItemSearch.FindById(_currentItem)}: {qDetailCached} — skipping rather than listing the wrong amount.");
+                        Addons.CloseAddon("RetainerSell");
+                        Addons.CloseSearchWindows();
+                        State = ListState.NextItem;
+                        return;
+                    }
                     Addons.SetPriceAndConfirm((int)Math.Min(cachedPrice, int.MaxValue));
-                    Log($"{ItemSearch.FindById(_currentItem)}: listed at {cachedPrice:N0}g (same as previous stack).");
+                    Log($"{ItemSearch.FindById(_currentItem)}: listed{(string.IsNullOrEmpty(qDetailCached) ? "" : $" {qDetailCached}")} at {cachedPrice:N0}g (same as previous stack).");
                     AfterListed();
                     Addons.CloseSearchWindows();
                     Wait(300);
@@ -469,9 +477,18 @@ public sealed class ListRunner
                     }
                     else
                     {
+                        if (!ApplyStackSize(_currentItem, out var qDetailReal))
+                        {
+                            Log($"{name}: {qDetailReal} — skipping rather than listing the wrong amount.");
+                            Addons.CloseAddon("RetainerSell");
+                            Addons.CloseSearchWindows();
+                            State = ListState.NextItem;
+                            return;
+                        }
                         Addons.SetPriceAndConfirm((int)Math.Min(price, int.MaxValue));
                         var extra = string.IsNullOrEmpty(_realPriceNote) ? "" : $" [{_realPriceNote}]";
-                        Log($"{name}: listed at {price:N0}g ({ScopeLabel()} base {_realPriceResult:N0}){extra}.");
+                        var qtyTagReal = string.IsNullOrEmpty(qDetailReal) ? "" : $" ({qDetailReal})";
+                        Log($"{name}: listed{qtyTagReal} at {price:N0}g ({ScopeLabel()} base {_realPriceResult:N0}){extra}.");
                         _runPriceCache[_currentItem] = price;
                         AfterListed();
                     }
@@ -499,9 +516,18 @@ public sealed class ListRunner
                     }
                     else
                     {
+                        if (!ApplyStackSize(_currentItem, out var qDetailBoard))
+                        {
+                            Log($"{name}: {qDetailBoard} — skipping rather than listing the wrong amount.");
+                            Addons.CloseAddon("RetainerSell");
+                            Addons.CloseSearchWindows();
+                            State = ListState.NextItem;
+                            return;
+                        }
                         Addons.SetPriceAndConfirm((int)Math.Min(price, int.MaxValue));
                         var extra = string.IsNullOrEmpty(note) ? "" : $" [{note}]";
-                        Log($"{name}: listed at {price:N0}g (base {basePrice:N0}){extra}.");
+                        var qtyTagBoard = string.IsNullOrEmpty(qDetailBoard) ? "" : $" ({qDetailBoard})";
+                        Log($"{name}: listed{qtyTagBoard} at {price:N0}g (base {basePrice:N0}){extra}.");
                         _runPriceCache[_currentItem] = price;
                         AfterListed();
                     }
@@ -707,5 +733,43 @@ public sealed class ListRunner
         State = ListState.Error; Status = msg; _plugin.Chat($"[Market Helper] {msg}");
         if (_postprocessMode) { var d = _onPostprocessDone; _postprocessMode = false; _onPostprocessDone = null; d?.Invoke(); }
     }
+
+    /// <summary>
+    /// Units to list for this item: the per-item override if set, otherwise the global default.
+    /// 0 means "whole stack" — the game's own behaviour.
+    /// </summary>
+    private int DesiredStackSize(uint itemId)
+    {
+        if (Cfg.ListerStackSizes.TryGetValue(itemId, out var per) && per > 0) return per;
+        return Math.Max(0, Cfg.ListerDefaultStackSize);
+    }
+
+    /// <summary>
+    /// Set the sell window's quantity before pricing, and VERIFY it took.
+    ///
+    /// Returns false if the field won't hold the value, in which case the caller must not confirm:
+    /// listing a stack of 18 at a per-unit price meant for 1 is an irreversible loss, so a failed
+    /// quantity is a reason to skip the item, never to carry on and hope.
+    /// </summary>
+    private bool ApplyStackSize(uint itemId, out string detail)
+    {
+        detail = string.Empty;
+        var want = DesiredStackSize(itemId);
+        if (want <= 0) return true;                       // whole stack: leave the field alone
+
+        var max = Addons.ReadMaxQuantity();
+        if (max <= 0) return true;                        // can't read the stack: leave it as-is
+        if (want >= max) { detail = $"stack of {max}"; return true; }   // already the whole stack
+
+        var got = Addons.SetQuantity(want, Cfg.ListerQuantityOpcode);
+        if (got != want)
+        {
+            detail = $"quantity field would not accept {want} (reads {got})";
+            return false;
+        }
+        detail = $"{want} of {max}";
+        return true;
+    }
+
     private void Log(string msg) { Report.Add(msg); Status = msg; if (Cfg.Verbose) _plugin.Chat($"[Market Helper] {msg}"); }
 }

@@ -108,6 +108,39 @@ public static unsafe class Addons
         Callback.Fire(&a->AtkUnitBase, true, 0);
     }
 
+    /// <summary>
+    /// Set how many units of the stack to list. Returns the value the field actually holds
+    /// afterwards, which the caller MUST check before confirming — a quantity that didn't take
+    /// means listing the whole stack at a single-unit price, which is a real loss, not a retry.
+    /// </summary>
+    public static int SetQuantity(int quantity, int opcode)
+    {
+        var a = GetRetainerSell();
+        if (a == null || a->Quantity == null) return -1;
+
+        a->Quantity->SetValue(quantity);
+        try { Callback.Fire(&a->AtkUnitBase, true, opcode, quantity); }
+        catch { /* the direct SetValue above is the load-bearing part */ }
+
+        return a->Quantity->Value;
+    }
+
+    /// <summary>Quantity currently in the sell window, or -1 if it can't be read.</summary>
+    public static int ReadQuantity()
+    {
+        var a = GetRetainerSell();
+        if (a == null || a->Quantity == null) return -1;
+        return a->Quantity->Value;
+    }
+
+    /// <summary>Units in the stack being listed, per the sell window's own maximum.</summary>
+    public static int ReadMaxQuantity()
+    {
+        var a = GetRetainerSell();
+        if (a == null || a->Quantity == null) return -1;
+        return a->Quantity->Data.Max;
+    }
+
     /// <summary>Set the asking price without confirming; the user confirms manually.</summary>
     public static void SetPriceOnly(int price)
     {

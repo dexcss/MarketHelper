@@ -1285,12 +1285,14 @@ public sealed class BuyRunner
             {
                 _plugin.AddonLifecycle.RegisterListener(AddonEvent.PostReceiveEvent, "ItemSearch", OnBoardEvent);
                 _plugin.AddonLifecycle.RegisterListener(AddonEvent.PostReceiveEvent, "ItemSearchResult", OnBoardEvent);
-                _plugin.Chat("[Market Helper] Learn mode ON — open a market board, click a search result, then click a listing. Turn it off when done.");
+                _plugin.AddonLifecycle.RegisterListener(AddonEvent.PostReceiveEvent, "RetainerSell", OnBoardEvent);
+                _plugin.Chat("[Market Helper] Learn mode ON — market board clicks AND the retainer sell window are logged. Turn it off when done.");
             }
             else
             {
                 _plugin.AddonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, "ItemSearch", OnBoardEvent);
                 _plugin.AddonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, "ItemSearchResult", OnBoardEvent);
+                _plugin.AddonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, "RetainerSell", OnBoardEvent);
                 _plugin.Chat("[Market Helper] Learn mode OFF.");
             }
             _learnHooked = want;
@@ -1321,6 +1323,7 @@ public sealed class BuyRunner
         {
             _plugin.AddonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, "ItemSearch", OnBoardEvent);
             _plugin.AddonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, "ItemSearchResult", OnBoardEvent);
+            _plugin.AddonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, "RetainerSell", OnBoardEvent);
         }
         catch { }
         _learnHooked = false;

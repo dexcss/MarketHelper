@@ -133,6 +133,17 @@ public class Configuration : IPluginConfiguration
     public bool ListerPriceByDc { get; set; } = false;     // legacy; superseded by ListerPriceScope
     public int ListerPriceScope { get; set; } = 0;         // 0 = home world, 1 = data center, 2 = region
 
+    // Units per listing. 0 means "whole stack", which is the game's own default. Set it to 1 to
+    // split a stack of 18 dye into 18 separate listings — remember a retainer only has 20 slots.
+    public int ListerDefaultStackSize { get; set; } = 0;
+
+    // Per-item override of the above, keyed by item id. 0 (or absent) falls back to the default.
+    public Dictionary<uint, int> ListerStackSizes { get; set; } = new();
+
+    // Callback case for the sell window's quantity field. The value is written directly too, and
+    // read back before confirming, so this is belt-and-braces rather than load-bearing.
+    public int ListerQuantityOpcode { get; set; } = 3;
+
     // Undercut pricing scope: 0 = home world (live board), 1 = data center, 2 = region (Universalis).
     public int UndercutPriceScope { get; set; } = 0;
     public int ListerUndercutBy { get; set; } = 1;         // gil below the lowest
