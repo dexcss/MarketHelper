@@ -735,14 +735,11 @@ public sealed class ListRunner
     }
 
     /// <summary>
-    /// Units to list for this item: the per-item override if set, otherwise the global default.
-    /// 0 means "whole stack" — the game's own behaviour.
+    /// Units per listing for this item, set per item in the Lister tab.
+    /// 0 (the default) means the whole stack in one listing — the game's own behaviour.
     /// </summary>
     private int DesiredStackSize(uint itemId)
-    {
-        if (Cfg.ListerStackSizes.TryGetValue(itemId, out var per) && per > 0) return per;
-        return Math.Max(0, Cfg.ListerDefaultStackSize);
-    }
+        => Cfg.ListerStackSizes.TryGetValue(itemId, out var per) && per > 0 ? per : 0;
 
     /// <summary>
     /// Set the sell window's quantity before pricing, and VERIFY it took.

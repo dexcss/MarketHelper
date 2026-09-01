@@ -133,11 +133,9 @@ public class Configuration : IPluginConfiguration
     public bool ListerPriceByDc { get; set; } = false;     // legacy; superseded by ListerPriceScope
     public int ListerPriceScope { get; set; } = 0;         // 0 = home world, 1 = data center, 2 = region
 
-    // Units per listing. 0 means "whole stack", which is the game's own default. Set it to 1 to
-    // split a stack of 18 dye into 18 separate listings — remember a retainer only has 20 slots.
-    public int ListerDefaultStackSize { get; set; } = 0;
-
-    // Per-item override of the above, keyed by item id. 0 (or absent) falls back to the default.
+    // Units per listing, PER ITEM, keyed by item id. Absent or 0 means the whole stack in one
+    // listing (the game's default). Set 1 to split a stack of 18 dye into 18 separate listings —
+    // remember a retainer only has 20 slots.
     public Dictionary<uint, int> ListerStackSizes { get; set; } = new();
 
     // Callback case for the sell window's quantity field. The value is written directly too, and

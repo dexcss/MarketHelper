@@ -114,9 +114,6 @@ public partial class MainWindow
         }
 
         Dummy(4f);
-        DrawStackSizeSetting();
-
-        Dummy(4f);
         ImGui.Separator();
 
         // --- Session list ---
@@ -187,19 +184,6 @@ public partial class MainWindow
         }
     }
 
-    private void DrawStackSizeSetting()
-    {
-        var def = Cfg.ListerDefaultStackSize;
-        ImGui.SetNextItemWidth(SW(120));
-        if (ImGui.InputInt("Units per listing (0 = whole stack)", ref def, 1))
-        { Cfg.ListerDefaultStackSize = Math.Clamp(def, 0, 999); Cfg.Save(); }
-        ImGui.SameLine(0, SW(6));
-        HelpMarker("Splits a stack across separate listings. Set 1 to sell a stack of 18 dye as 18 single listings. Each listing uses one of the retainer's 20 slots, so a big stack can fill a retainer on its own — the Lister carries the rest to the next retainer. Per-item overrides sit next to each item above.");
-
-        if (Cfg.ListerDefaultStackSize == 1)
-            WrapText(Grey, "At 1 unit per listing, a stack of 18 needs 18 of the retainer's 20 slots.");
-    }
-
     private void DrawItemList(string title, List<uint> list, string id, bool isSession)
     {
         ImGui.Text($"{title} ({list.Count}):");
@@ -216,13 +200,18 @@ public partial class MainWindow
                 {
                     var name = ItemSearch.FindById(itemId);
                     if (string.IsNullOrEmpty(name)) name = $"Item #{itemId}";
+
                     if (ImGui.SmallButton($"x##{id}rm{itemId}")) remove = itemId;
 
-                    // Per-item stack size. 0 shows as "all" and falls back to the global default.
-                    ImGui.SameLine();
+                    ImGui.SameLine(0, SW(6));
+                    ImGui.TextUnformatted($"{name}  -  Stack Size:");
+
+                    // Units per listing for THIS item. 0 keeps the game's own behaviour: the whole
+                    // stack goes up as a single listing.
+                    ImGui.SameLine(0, SW(6));
                     var per = Cfg.ListerStackSizes.TryGetValue(itemId, out var v) ? v : 0;
-                    ImGui.SetNextItemWidth(SW(64));
-                    if (ImGui.InputInt($"##{id}qty{itemId}", ref per, 0))
+                    ImGui.SetNextItemWidth(SW(74));
+                    if (ImGui.InputInt($"##{id}qty{itemId}", ref per, 1))
                     {
                         per = Math.Clamp(per, 0, 999);
                         if (per <= 0) Cfg.ListerStackSizes.Remove(itemId);
@@ -230,13 +219,13 @@ public partial class MainWindow
                         Cfg.Save();
                     }
                     if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip("Units per listing for this item. 0 = use the default below.");
+                        ImGui.SetTooltip("How many units go in each listing.\n0 = the whole stack as one listing (default).\n1 = one listing per unit, so a stack of 18 becomes 18 listings.\nEach listing takes one of the retainer's 20 slots.");
 
-                    ImGui.SameLine();
-                    var effective = per > 0 ? per : Math.Max(0, Cfg.ListerDefaultStackSize);
-                    ImGui.TextColored(effective > 0 ? Gold : Grey, effective > 0 ? $"x{effective}" : "all");
-                    ImGui.SameLine();
-                    ImGui.Text(name);
+                    if (per <= 0)
+                    {
+                        ImGui.SameLine(0, SW(6));
+                        ImGui.TextColored(Grey, "whole stack");
+                    }
                 }
                 if (remove.HasValue) { list.Remove(remove.Value); if (!isSession) Cfg.Save(); }
             }
