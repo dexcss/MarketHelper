@@ -399,10 +399,24 @@ public sealed class NavRunner
 
                 if (Addons.Exists("ContextMenu"))
                 {
-                    // HARD SAFETY: before opening the price editor, verify this slot's price isn't
-                    // in mannequin territory. The direct price read (GetRetainerMarketPrice) is
-                    // proven reliable. If the item is a display piece, touching it could delist it,
-                    // so we cancel and skip. Runs independent of the user's toggles.
+                    // HARD SAFETY: never touch a display item. Re-check the mannequin icon here —
+                    // the sell list is still open, so the row is readable, and this is the signal
+                    // verified against a real mannequin row (node 11 flips visible on it).
+                    if (Addons.IsSellListRowMannequin(_itemSlot) != false)
+                    {
+                        Log($"Item {_itemSlot + 1}: mannequin icon at context menu — cancelling (not clicking).");
+                        Addons.CloseAddon("ContextMenu");
+                        _itemSlot++;
+                        Wait(250);
+                        State = NavState.NextItem;
+                        return;
+                    }
+
+                    // Second guard: a listing priced in display-item territory. NOTE this reads the
+                    // retainer market inventory BY INDEX, which does not match the order the sell
+                    // list displays rows in (the run log shows slot 1 reporting 24,994g for a
+                    // Wooden Table whose real asking price is 57,994g). So this is a backstop only;
+                    // the icon check above is the reliable one.
                     var guardPrice = RetainerReader.MarketPriceAtSlot(_itemSlot);
                     if (guardPrice >= (ulong)Cfg.MannequinSafetyPrice)
                     {
