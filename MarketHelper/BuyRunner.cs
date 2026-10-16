@@ -1139,6 +1139,7 @@ public sealed class BuyRunner
 
         var newStops = new Dictionary<string, WorldStop>(StringComparer.OrdinalIgnoreCase);
         var tooDear = 0;
+        var skippedTooBig = 0;
 
         foreach (var summary in _plan.Items)
         {
@@ -1159,7 +1160,17 @@ public sealed class BuyRunner
             {
                 var next = summary.Spare[0];
                 if (next.UnitPrice > ceiling) { tooDear++; break; }        // sorted — rest are dearer
-                if (next.Quantity > need && !Cfg.BuyerAllowOvershoot) break;
+
+                // A listing bigger than what's still needed can't be bought whole — the game sells
+                // a listing entire. SKIP it and keep looking: a later spare may be smaller and fit,
+                // and abandoning the item here is what left orders unfilled when the planned
+                // listings had already been bought by someone else.
+                if (next.Quantity > need && !Cfg.BuyerAllowOvershoot)
+                {
+                    summary.Spare.RemoveAt(0);
+                    skippedTooBig++;
+                    continue;
+                }
 
                 summary.Spare.RemoveAt(0);                                  // consumed, never reused
 
@@ -1177,6 +1188,8 @@ public sealed class BuyRunner
         {
             if (tooDear > 0)
                 Log($"Top-up skipped: the remaining listings are above the price rail (plan +{Cfg.BuyerTopUpMaxOverPlanPercent}%). Re-scan if you want them at current prices.");
+            else if (skippedTooBig > 0)
+                Log($"Top-up skipped: {skippedTooBig} remaining listing(s) are bigger than what's still needed, and the game only sells a listing whole. Re-scan to find smaller stacks, or turn on 'Buy oversized stacks' in Buyer settings.");
             return false;
         }
 
@@ -1198,7 +1211,8 @@ public sealed class BuyRunner
         _extensionPasses++;
         var units = ordered.Sum(st => st.TotalUnits);
         var cost = ordered.Sum(st => st.TotalCost);
-        Log($"Still short — top-up pass {_extensionPasses}: {units} more unit(s) from the next cheapest listings across {ordered.Count} world(s), about {cost:N0}g.");
+        var tooBigNote = skippedTooBig > 0 ? $"; skipped {skippedTooBig} listing(s) bigger than what was still needed" : "";
+        Log($"Still short — top-up pass {_extensionPasses}: {units} more unit(s) from the next cheapest listings across {ordered.Count} world(s), about {cost:N0}g{tooBigNote}.");
         Note(AuditKind.Item, $"top-up pass {_extensionPasses}: {units} unit(s) across {ordered.Count} world(s)",
             qty: units, expected: cost);
         return true;
