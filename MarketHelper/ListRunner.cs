@@ -133,7 +133,14 @@ public sealed class ListRunner
         done?.Invoke();
     }
 
-    public void Stop() { State = ListState.Idle; Status = "Stopped."; }
+    public void Stop()
+    {
+        // If AutoRetainer is blocked waiting on our postprocess callback, release it — otherwise
+        // AR hangs believing a plugin never finished its pass.
+        if (_postprocessMode) { EndPostprocess(); return; }
+        State = ListState.Idle;
+        Status = "Stopped.";
+    }
 
     public void Tick()
     {
@@ -300,7 +307,7 @@ public sealed class ListRunner
                     return;
                 }
 
-                var stacksRemain = RetainerReader.FindItemSlot(item, includeRetainer: true) != null;
+                var stacksRemain = RetainerReader.FindRetainerItemSlot(item) != null;
                 if (!stacksRemain)
                 {
                     // Genuinely done with this item — nothing left in inventory.
@@ -337,7 +344,7 @@ public sealed class ListRunner
                 }
                 _currentItem = _queue[0];
                 _queue.RemoveAt(0);
-                _currentLoc = RetainerReader.FindItemSlot(_currentItem, includeRetainer: true);
+                _currentLoc = RetainerReader.FindRetainerItemSlot(_currentItem);
                 if (_currentLoc == null)
                     return; // not on this retainer/inventory; try next queued item
                 State = ListState.BeginSell;
@@ -523,7 +530,12 @@ public sealed class ListRunner
                 _ticks++;
                 if (MarketData.ListingsReady() || _ticks > 60)
                 {
-                    var listings = MarketData.GetListings();
+                    // Only trust the board when the proxy is actually showing OUR item. It keeps the
+                    // previous item's rows resident after a new search starts, so without this the
+                    // previous item's prices get applied to this one.
+                    var listings = MarketData.SearchItemId() == _currentItem
+                        ? MarketData.GetListings()
+                        : new List<Listing>();
                     var name = ItemSearch.FindById(_currentItem);
                     var ascending = listings.Select(l => (long)l.Price).OrderBy(p => p).ToList();
                     var (basePrice, note) = ChooseBasePrice(ascending);
@@ -803,7 +815,14 @@ public sealed class ListRunner
         _lastListedUnits = want > 0 ? want : (max > 0 ? max : 1);
 
         if (want <= 0) return true;                       // whole stack: leave the field alone
-        if (max <= 0) return true;                        // can't read the stack: leave it as-is
+        if (max <= 0)
+        {
+            // A specific per-listing size was asked for but the stack size can't be read, so there
+            // is no way to verify the field took it. Listing the whole stack here is exactly the
+            // mistake this method exists to prevent, so skip rather than carry on.
+            detail = "couldn't read the stack size to verify the listing quantity";
+            return false;
+        }
         if (want >= max)
         {
             _lastListedUnits = max;

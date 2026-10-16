@@ -64,6 +64,7 @@ public sealed class NavRunner
     private bool _marketConfirmedEmpty; // true only when we POSITIVELY confirmed zero listings
     private volatile bool _uniPending;                    // Universalis fetch in flight (DC/region scope)
     private List<Listing>? _uniListings;                  // converted Universalis listings for Compute
+    private volatile int _uniGeneration;                  // bumped to invalidate in-flight fetches
     private bool _throttleBackoff;  // set when a search likely hit the game's rate limit
     private int _throttleStreak;    // consecutive throttles, to escalate the backoff
     private int _throttleRetries;   // retries of the CURRENT item due to rate-limit (reset per item)
@@ -82,6 +83,7 @@ public sealed class NavRunner
     // callback. We do NOT touch the bell, retainer selection, or Quit in this mode.
     private bool _postprocessMode;
     private Action? _onPostprocessDone;
+    private bool _contextActed;                          // guards against re-firing the context-menu click
     private double _postprocessStart;                    // when postprocess began (watchdog)
     private const int PostprocessMaxMs = 45_000;         // hard cap before force-releasing AR
 
@@ -100,7 +102,7 @@ public sealed class NavRunner
         Report.Clear();
         _priceMemory.Clear();
         _throttleStreak = 0; _throttleBackoff = false; _marketConfirmedEmpty = false; _throttleRetries = 0;
-        _uniListings = null; _uniPending = false;
+        _uniListings = null; _uniPending = false; _uniGeneration++;
         _retainerIdx = -1;
         if (Addons.Exists("RetainerList"))
         {
@@ -139,7 +141,7 @@ public sealed class NavRunner
         Report.Clear();
         _priceMemory.Clear();
         _throttleStreak = 0; _throttleBackoff = false; _marketConfirmedEmpty = false; _throttleRetries = 0;
-        _uniListings = null; _uniPending = false;
+        _uniListings = null; _uniPending = false; _uniGeneration++;
         _postprocessMode = true;
         _onPostprocessDone = onDone;
         _postprocessStart = Now;
@@ -335,7 +337,7 @@ public sealed class NavRunner
                 break;
 
             case NavState.NextItem:
-                _uniListings = null;   // fresh Universalis fetch per item (DC/region scope)
+                _uniListings = null; _uniGeneration++;   // fresh Universalis fetch per item (DC/region scope)
                 if (_itemSlot >= _itemCount)
                 {
                     _ticks = 0;
@@ -377,15 +379,22 @@ public sealed class NavRunner
 
             case NavState.WaitContextOrSell:
                 if (Now < _deadline) return;
-                if (Addons.IsReady("RetainerSell")) { _ticks = 0; _nameProbe = string.Empty; State = NavState.WaitRetainerSell; return; }
+                if (Addons.IsReady("RetainerSell"))
+                {
+                    _ticks = 0; _nameProbe = string.Empty; _contextActed = false;
+                    // A new sell window is real progress: restart the AutoRetainer watchdog so a
+                    // full retainer isn't force-released partway through (see the cap in Tick).
+                    _postprocessStart = 0;
+                    State = NavState.WaitRetainerSell;
+                    return;
+                }
 
                 if (Addons.Exists("ContextMenu"))
                 {
-                    // HARD SAFETY: before clicking the context menu (whose first entry we assume is
-                    // "Adjust Price"), verify this slot's price isn't in mannequin territory. The
-                    // direct price read (GetRetainerMarketPrice) is proven reliable. If the item is
-                    // a display piece, clicking entry 0 could delist it — so we cancel and skip.
-                    // This guard always runs, independent of the user's skip-preference toggles.
+                    // HARD SAFETY: before opening the price editor, verify this slot's price isn't
+                    // in mannequin territory. The direct price read (GetRetainerMarketPrice) is
+                    // proven reliable. If the item is a display piece, touching it could delist it,
+                    // so we cancel and skip. Runs independent of the user's toggles.
                     var guardPrice = RetainerReader.MarketPriceAtSlot(_itemSlot);
                     if (guardPrice >= (ulong)Cfg.MannequinSafetyPrice)
                     {
@@ -396,14 +405,22 @@ public sealed class NavRunner
                         State = NavState.NextItem;
                         return;
                     }
-                    Addons.ContextMenuFirst();
+                    // Click the entry once. Re-firing every tick while the menu lingers could select
+                    // twice or drop into a submenu.
+                    if (!_contextActed)
+                    {
+                        Addons.ContextMenuFirst();
+                        _contextActed = true;
+                    }
                     Wait(120);
                     return;
                 }
+                _contextActed = false;
                 if (Now > _deadline + 5000)
                 {
                     Log($"Item {_itemSlot + 1}: sell window didn't open, skipping.");
                     _itemSlot++;
+                    _contextActed = false;
                     State = NavState.NextItem;
                 }
                 break;
@@ -425,7 +442,9 @@ public sealed class NavRunner
                     }
                     if (name != _nameProbe)
                     {
-                        // Name changed since last check — not settled yet. Store and re-check.
+                        // Name changed since last check — not settled yet. Count these too, or a
+                        // name that keeps alternating never times out and the state spins forever.
+                        if (_ticks++ > 40) { Log("Item name never settled, skipping."); _itemSlot++; State = NavState.NextItem; }
                         _nameProbe = name;
                         Wait(80);
                         return;
@@ -624,18 +643,22 @@ public sealed class NavRunner
                         var loc = UndercutScopeLocation();
                         var hqOnly = _openHq;
                         var depth = Math.Max(10, Cfg.PriceSanityCheckDepth * 2);
+                        var gen = _uniGeneration;   // invalidated if the run or the item changes
                         _ = System.Threading.Tasks.Task.Run(async () =>
                         {
+                            List<Listing> conv;
                             try
                             {
                                 var r = await Universalis.GetListingsAsync(loc, itemId, depth, hqOnly);
-                                var conv = new List<Listing>();
+                                conv = new List<Listing>();
                                 foreach (var l in r.Listings)
                                     conv.Add(new Listing { Price = (uint)Math.Min(l.PricePerUnit, uint.MaxValue), IsHq = l.Hq, Quantity = (uint)l.Quantity, Retainer = l.Retainer });
-                                _uniListings = conv;
                             }
-                            catch { _uniListings = new List<Listing>(); }
-                            finally { _uniPending = false; }
+                            catch { conv = new List<Listing>(); }
+                            // Publish only if nothing reset the run or advanced to another item while
+                            // this was in flight — otherwise the previous item's prices would be
+                            // applied to the new one.
+                            if (gen == _uniGeneration) { _uniListings = conv; _uniPending = false; }
                         });
                     }
                     if (_uniPending) { Wait(150); return; }   // still fetching

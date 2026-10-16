@@ -15,7 +15,10 @@ namespace MarketHelper;
 /// </summary>
 public static class WorldInfo
 {
-    /// <summary>The player's current (home) world name, or empty if unavailable.</summary>
+    /// <summary>
+    /// The world the player is standing on right now, or empty if unavailable. During a world visit
+    /// this is NOT the home world — callers that mean "home" should read Player.Object.HomeWorld.
+    /// </summary>
     public static string CurrentWorld()
     {
         if (!Player.Available) return string.Empty;
@@ -181,15 +184,21 @@ public static class WorldInfo
     /// <summary>
     /// Every data center that shares a region with the given one, including it.
     ///
-    /// Two sources now, in descending order of trust:
+    /// Two sources, in descending order of trust:
     ///   1. The client's own DataCenterHelper list — authoritative, and it tracks Square Enix
     ///      layout changes without a plugin update. Trusted only if it actually contains the DC
-    ///      we are standing on, so a stale or other-region list can never hijack the result.
-    ///   2. The sheet's own grouping: WorldDCGroupType.Region.RowId. Checked directly against the
-    ///      installed client's sheets this is 1=Japan {Elemental, Gaia, Mana, Meteor}, 2=NA,
-    ///      3=EU, 4=Oceania — i.e. it groups Japan's four data centers correctly, which is what
-    ///      the old "it returned Elemental alone" story got wrong. The static name table this
-    ///      used to carry is gone: it stood in for a failure the sheet does not actually have.
+    ///      we are standing on, so a stale or other-region list can never hijack the result. The
+    ///      list is then narrowed to data centers the World sheet actually uses, which is what
+    ///      folds Japan's four client-visible DC names down to the one its worlds belong to.
+    ///   2. The sheet's own grouping: WorldDCGroupType.Region.RowId, reached by DC name. Checked
+    ///      against the installed sheets this is 1=Japan, 2=North America, 3=Europe, 4=Oceania.
+    ///
+    /// A note on Japan, because it looks wrong and isn't: the client still lists four Japanese
+    /// data centers (Elemental, Gaia, Mana, Meteor), but the free-travel beta assigns every JP
+    /// world to a single one of them — Elemental — so "my whole region" in Japan correctly
+    /// resolves to all 32 JP worlds under one data center rather than four. Universalis's own
+    /// /api/v2/data-centers listing agrees (it has no Gaia/Mana/Meteor, only Elemental with 32
+    /// worlds). The static name table this used to carry stood in for a failure that isn't real.
     /// </summary>
     public static List<string> SiblingDataCenters(string dcName)
     {

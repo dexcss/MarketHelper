@@ -26,7 +26,12 @@ public partial class MainWindow
         ImGui.InputTextWithHint("##flipsearch", "Type an item name...", ref _flipQuery, 100);
         ImGui.SameLine(0, SW(6));
         var hq = Flip.HqOnly;
-        if (ImGui.Checkbox("HQ only", ref hq)) Flip.HqOnly = hq;
+        if (ImGui.Checkbox("HQ only", ref hq))
+        {
+            Flip.HqOnly = hq;
+            // The flag is only read when a query starts, so re-run it or the tick does nothing.
+            if (Flip.ItemId != 0) Flip.Search(Flip.ItemId, Flip.ItemName);
+        }
 
         // Live suggestions
         if (_flipQuery.Trim().Length >= 2)
@@ -107,9 +112,13 @@ public partial class MainWindow
             {
                 ImGui.TextColored(netProfit > 0 ? Green : Red,
                     $"After tax: {netProfit:N0}g per unit");
-                ImGui.TextColored(Grey,
-                    $"(buy {netPay:N0}g incl. {Cfg.BuyerTaxPercent:0.#}% buyer tax; " +
-                    $"receive {netReceive:N0}g after {Cfg.SellerTaxPercent:0.#}% seller tax)");
+                var buyText = buyerRate > 0f
+                    ? $"buy {netPay:N0}g incl. {Cfg.BuyerTaxPercent:0.#}% buyer tax"
+                    : $"buy {netPay:N0}g";
+                var sellText = sellerRate > 0f
+                    ? $"receive {netReceive:N0}g after {Cfg.SellerTaxPercent:0.#}% seller tax"
+                    : $"receive {netReceive:N0}g";
+                ImGui.TextColored(Grey, $"({buyText}; {sellText})");
             }
             ImGui.Unindent(SW(10));
         }

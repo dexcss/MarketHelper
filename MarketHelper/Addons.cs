@@ -12,8 +12,10 @@ namespace MarketHelper;
 /// Every value here is verified against real API-15 plugins, not guessed:
 ///  - Price is set via the typed AddonRetainerSell->AskingPrice->SetValue(int), the same
 ///    call AllaganMarket uses (RetainerSellOverlayWindow.cs). This is NOT a callback.
-///  - Compare Prices = event 4, Confirm = event 21. Both confirmed from Marketbuddy's
-///    annotated ReceiveEvent captures (MarketGuiEventHandler.cs).
+///  - Compare Prices = event 4 (confirmed from Marketbuddy's annotated ReceiveEvent captures).
+///    Confirm = event 0, matching the working MarketBotty script
+///    (SafeCallback("RetainerSell", true, 2, price) then SafeCallback("RetainerSell", true, 0)).
+///    An older header note claimed 21 for Confirm; the code has always used 0 and that is correct.
 ///  - Button clicks/closes use ECommons Callback.Fire(addon, updateState, values...),
 ///    the same helper AutoRetainer uses throughout its retainer handlers.
 /// </summary>
@@ -69,11 +71,22 @@ public static unsafe class Addons
         return sb.ToString().Trim();
     }
 
+    /// <summary>The open item's name exactly as the node holds it, glyphs included (for HQ detection).</summary>
+    public static string GetOpenItemNameRaw()
+    {
+        var a = GetRetainerSell();
+        if (a == null || a->ItemName == null) return string.Empty;
+        return a->ItemName->NodeText.ToString();
+    }
+
     public static bool GetOpenItemIsHq()
     {
-        // The HQ glyph is embedded in the item name text; detect the private-use HQ symbol.
-        var name = GetOpenItemName();
-        return name.Contains('\uE03C'); // FFXIV HQ symbol
+        // The HQ glyph (U+E03C — confirmed against FFXIVClientStructs' own comment and
+        // InventoryTools) sits in the private-use range that CleanText strips, so this MUST read
+        // the RAW node text. The previous version read the cleaned name, i.e. searched for a
+        // character it had just removed: it could never be true, so every HQ item was priced as
+        // NQ (and an HQ-only market had the NQ multiplier applied on top).
+        return GetOpenItemNameRaw().Contains('\uE03C');
     }
 
     public static int GetCurrentAskingPrice()
@@ -102,9 +115,21 @@ public static unsafe class Addons
         if (a == null || a->AskingPrice == null) return;
 
         // Set price: the script uses callback (2, price); AllaganMarket sets the field directly.
-        // We do both for robustness — set the field, then fire the set-price event, then confirm.
+        // We do both for robustness — set the field, then fire the set-price event.
         a->AskingPrice->SetValue(price);
         Callback.Fire(&a->AtkUnitBase, true, 2, price);
+
+        // Read the field back and only confirm when it actually holds the price we asked for.
+        // Confirming blind is the one unrecoverable mistake here: if the value did not take, the
+        // listing goes out at whatever the field was showing (often the game's suggested price).
+        // The quantity path already refuses to confirm on a mismatch; the price path must too.
+        var got = a->AskingPrice->Value;
+        if (got != price)
+        {
+            Svc.Chat.Print($"[Market Helper] Price didn't take ({got:N0}g, wanted {price:N0}g) — not confirming. Close the window and retry.");
+            CloseAddon("RetainerSell");
+            return;
+        }
         Callback.Fire(&a->AtkUnitBase, true, 0);
     }
 
@@ -320,11 +345,23 @@ public static unsafe class Addons
         Callback.Fire(a, true, 0, slot, 1);
     }
 
-    /// <summary>ContextMenu: click the first entry ("Adjust Price"). Callback (0, 0).</summary>
+    /// <summary>Addon sheet row 959 = "Adjust Price" — the RetainerSellList context-menu entry.</summary>
+    public static string AdjustPriceText()
+    {
+        var row = Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Addon>()?.GetRowOrDefault(959);
+        return row?.Text.ExtractText() ?? "Adjust Price";
+    }
+
+    /// <summary>
+    /// RetainerSellList context menu: open the price editor. Selects the "Adjust Price" entry BY
+    /// NAME, and only falls back to the historical positional (0,0) if that name isn't present —
+    /// so a drifted or unexpected menu can never blind-click a destructive entry at index 0.
+    /// </summary>
     public static void ContextMenuFirst()
     {
         var a = GetAddon("ContextMenu");
         if (a == null) return;
+        if (SelectContextMenuByText(AdjustPriceText(), "Adjust Price") >= 0) return;
         Callback.Fire(a, true, 0, 0);
     }
 

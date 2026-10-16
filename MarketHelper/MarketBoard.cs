@@ -448,9 +448,31 @@ public static unsafe class MarketBoard
 
     public static bool ConfirmVisible => Addons.IsVisible("SelectYesno");
 
-    /// <summary>SelectYesno: 0 = Yes, 1 = No. The long-standing convention across this codebase.</summary>
+    /// <summary>
+    /// Answer the SelectYesno dialog. This is the purchase confirmation and it spends real gil, so
+    /// it goes through the same path a human click takes — the button node's own click handler —
+    /// rather than firing the addon callback directly. ECommons and AutoRetainer both answer
+    /// SelectYesno this way, because the callback shape isn't guaranteed across dialogs.
+    ///
+    /// RespectDisabledButtons is set so a button the game has disabled (for example when you cannot
+    /// afford the purchase) is never force-enabled and clicked; if Yes is disabled we simply do not
+    /// answer, and the runner's gil check moves on. The raw callback is kept only as a fallback for
+    /// the unlikely case the addon master cannot be built.
+    /// </summary>
     public static void AnswerConfirm(bool yes)
     {
+        try
+        {
+            if (ECommons.GenericHelpers.TryGetAddonMaster<ECommons.UIHelpers.AddonMasterImplementations.AddonMaster.SelectYesno>(out var m)
+                && m.IsAddonReady)
+            {
+                m.RespectDisabledButtons = true;
+                if (yes) m.Yes(); else m.No();
+                return;
+            }
+        }
+        catch { /* fall through to the callback */ }
+
         var addon = Addons.GetAddon("SelectYesno");
         if (addon == null) return;
         Callback.Fire(addon, true, yes ? 0 : 1);

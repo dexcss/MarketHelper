@@ -40,7 +40,7 @@ public partial class MainWindow
         ImGui.TextColored(ctrl ? Green : Grey, ctrl ? "CTRL held — hover an item to add it." : "Hold CTRL and hover an item to quick-add.");
         if (ctrl && Svc.GameGui.HoveredItem > 0)
         {
-            var id = (uint)(Svc.GameGui.HoveredItem % 1000000);
+            var id = Dalamud.Utility.ItemUtil.GetBaseId((uint)Svc.GameGui.HoveredItem).ItemId;
             if (id > 0 && Cfg.BuyerItems.All(i => i.ItemId != id))
             {
                 var nm = ItemSearch.FindById(id);
@@ -261,8 +261,11 @@ public partial class MainWindow
         var result = MakePlaceImport.ParseFurniture(_mpPaste);
         if (result.Error != null) { _mpStatus = result.Error; return; }
 
-        if (_mpReplace) Cfg.BuyerItems.Clear();
-        Cfg.BuyerUnbuyable.Clear();
+        if (_mpReplace)
+        {
+            Cfg.BuyerItems.Clear();
+            Cfg.BuyerUnbuyable.Clear();
+        }
 
         foreach (var entry in result.Items)
         {

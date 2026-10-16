@@ -45,7 +45,7 @@ public partial class MainWindow
             : "Hold CTRL and hover an item to quick-add.");
         if (ctrl && Svc.GameGui.HoveredItem > 0)
         {
-            var id = (uint)(Svc.GameGui.HoveredItem % 1000000);
+            var id = Dalamud.Utility.ItemUtil.GetBaseId((uint)Svc.GameGui.HoveredItem).ItemId;
             if (id > 0)
             {
                 // Only add marketable items; AddListerItem rejects duplicates across both lists.

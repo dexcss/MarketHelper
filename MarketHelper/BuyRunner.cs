@@ -94,6 +94,12 @@ public sealed class BuyRunner
     private int _expectedQty;
     private string _homeWorld = string.Empty;
 
+    // Travel classification from Lifestream's own reachability IPC (see LifestreamBridge). When the
+    // endpoints aren't there this stays false and the runner falls back to comparing data-center
+    // names. _travelCrossDc records how the current hop is being made, for logging and deadlines.
+    private bool _lifestreamReachability;
+    private bool _travelCrossDc;
+
     // Dry run only: listings we've already "bought" on paper, so the loop advances.
     private readonly HashSet<string> _simulated = new();
 
@@ -124,6 +130,12 @@ public sealed class BuyRunner
                 if (!_plannedMax.TryGetValue(line.ItemId, out var cur) || line.UnitPrice > cur)
                     _plannedMax[line.ItemId] = line.UnitPrice;
         _homeWorld = string.IsNullOrWhiteSpace(Cfg.BuyerHomeWorld) ? WorldInfo.CurrentWorld() : Cfg.BuyerHomeWorld.Trim();
+
+        // Ask Lifestream once whether it can answer "can I visit this world?". Its world sets are
+        // built at login and fixed for the session, so one probe covers the whole run. If it can't
+        // answer we fall back to comparing data-center names — which can't tell a Japanese world
+        // visit from an inter-DC transfer, since Japan is now one freely-travelled data center.
+        _lifestreamReachability = LifestreamBridge.Available && LifestreamBridge.ReachabilityAvailable();
 
         var already = DryRun ? 0 : plan.Bought.Values.Sum();
         var stillNeeded = DryRun
@@ -322,10 +334,37 @@ public sealed class BuyRunner
                     State = BuyState.FindBoard;
                     return;
                 }
-                if (!string.IsNullOrWhiteSpace(_stop.DataCenter)
+
+                // Travel decision, straight from Lifestream when it can answer. Comparing
+                // data-center NAMES can't distinguish a plain world visit from a transfer: Japan is
+                // now one freely-travelled data center, so every JP stop is a same-DC visit even
+                // though the client still lists four JP DCs. Lifestream encodes the real rules
+                // (including the Oceania/Materia exception), so ask it first; only fall back to the
+                // name guess when it can't answer.
+                _travelCrossDc = false;
+                if (_lifestreamReachability)
+                {
+                    var sameDc = LifestreamBridge.CanVisitSameDC(_stop.World);
+                    var crossDc = !sameDc && LifestreamBridge.CanVisitCrossDC(_stop.World);
+                    if (!sameDc && !crossDc)
+                    {
+                        Log($"Skipping {_stop.World} — Lifestream reports no route there from your data center.");
+                        Note(AuditKind.Skip, $"{_stop.World}: skipped, not reachable from here");
+                        State = BuyState.NextStop;
+                        return;
+                    }
+                    _travelCrossDc = crossDc;
+                    Log(crossDc
+                        ? $"{_stop.World} needs a data-center transfer — this one can queue for a while."
+                        : $"{_stop.World} is a same-data-center world visit.");
+                }
+                else if (!string.IsNullOrWhiteSpace(_stop.DataCenter)
                     && !string.IsNullOrWhiteSpace(hereDc)
                     && !string.Equals(hereDc, _stop.DataCenter, StringComparison.OrdinalIgnoreCase))
+                {
                     Log($"Data-center transfer: {hereDc} -> {_stop.DataCenter}. This one can queue for a while.");
+                }
+
                 State = BuyState.Travel;
                 return;
             }
@@ -358,7 +397,9 @@ public sealed class BuyRunner
                 if (string.Equals(WorldInfo.CurrentWorld(), _stop.World, StringComparison.OrdinalIgnoreCase)
                     && !LifestreamBridge.IsBusy())
                 {
-                    Log($"Arrived on {_stop.World}.");
+                    Log(_travelCrossDc
+                        ? $"Arrived on {_stop.World} (data-center transfer complete)."
+                        : $"Arrived on {_stop.World}.");
                     Note(AuditKind.Arrive, $"arrived on {_stop.World}");
                     Wait(1500);
                     State = BuyState.FindBoard;
@@ -1036,20 +1077,19 @@ public sealed class BuyRunner
         => $"{l.Index}|{l.UnitPrice}|{l.Quantity}|{l.Seller}";
 
     /// <summary>
-    /// Items to try at this stop: the ones the plan allocated here, PLUS any item still short of
-    /// its order that the scan saw listed on this world at all.
+    /// Items to try at this stop: EXACTLY what the plan allocated here.
     ///
-    /// That second group is the point. The plan spreads an order over the globally cheapest
-    /// listings, so a world holding 40 of something may have been allocated 5 — or none. Without
-    /// this, a shortfall from an earlier world could never be made up even though the stock is
-    /// sitting right here.
+    /// Deliberately not "allocated items PLUS anything still short that happens to be listed here".
+    /// An earlier build did that and re-planned mid-route, so it paid the current world's expensive
+    /// tail while cheaper listings waited further along the route — 17 Everkeep Stereos at 1.3-1.4M
+    /// each while Brynhildr had them at 975k. The plan is locked at scan time; shortfalls are
+    /// collected at the END of the route by TryExtendPlan, never chased here. Extension stops carry
+    /// their own lines, so a top-up pass arrives here as ordinary allocated work.
     /// </summary>
     private void BuildItemQueue()
     {
         if (_stop == null) { _itemQueue = new List<uint>(); _itemIdx = -1; return; }
 
-        // Only what this stop was allocated. Extension stops carry their own lines, so a top-up
-        // pass arrives here as ordinary allocated work.
         _itemQueue = _stop.Lines.Select(l => l.ItemId).Distinct().ToList();
         _itemIdx = -1;
     }

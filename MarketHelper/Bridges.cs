@@ -19,6 +19,8 @@ public static class LifestreamBridge
     private const string IpcExecuteCommand = "Lifestream.ExecuteCommand";
     private const string IpcIsBusy = "Lifestream.IsBusy";
     private const string IpcAbort = "Lifestream.Abort";
+    private const string IpcCanVisitSameDc = "Lifestream.CanVisitSameDC";
+    private const string IpcCanVisitCrossDc = "Lifestream.CanVisitCrossDC";
 
     /// <summary>True if Lifestream is loaded and its IPC responds.</summary>
     public static bool Available
@@ -60,6 +62,50 @@ public static class LifestreamBridge
     {
         try { Svc.PluginInterface.GetIpcSubscriber<object>(IpcAbort).InvokeAction(); }
         catch { /* not loaded — nothing to abort */ }
+    }
+
+    /// <summary>
+    /// Can this world be reached as a plain world visit, i.e. without a data-center transfer?
+    ///
+    /// Lifestream answers from the game's own world/data-center data, so it already accounts for
+    /// the recent Japanese change that folds every JP world into one freely-travelled data center —
+    /// something comparing data-center NAMES here can't see. False when Lifestream isn't loaded or
+    /// doesn't answer.
+    /// </summary>
+    public static bool CanVisitSameDC(string world)
+    {
+        try { return Svc.PluginInterface.GetIpcSubscriber<string, bool>(IpcCanVisitSameDc).InvokeFunc(world); }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Can this world be reached only by a data-center transfer (or via the Oceania/Materia
+    /// exception)? False for a same-DC world, and also false when Lifestream can't answer — so
+    /// callers must gate on <see cref="ReachabilityAvailable"/> before treating a double-false as
+    /// "unreachable".
+    /// </summary>
+    public static bool CanVisitCrossDC(string world)
+    {
+        try { return Svc.PluginInterface.GetIpcSubscriber<string, bool>(IpcCanVisitCrossDc).InvokeFunc(world); }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// True when the reachability endpoints actually answer. Probed with the world we're standing
+    /// on, which is always a same-DC world — so a false result means the endpoints are missing (an
+    /// older Lifestream) rather than that anything is unreachable. Callers use this to decide
+    /// whether <see cref="CanVisitSameDC"/>/<see cref="CanVisitCrossDC"/> can be trusted, so a
+    /// missing endpoint degrades to the old name-based guess instead of skipping every world.
+    /// </summary>
+    public static bool ReachabilityAvailable()
+    {
+        try
+        {
+            var here = WorldInfo.CurrentWorld();
+            if (string.IsNullOrWhiteSpace(here)) return false;
+            return Svc.PluginInterface.GetIpcSubscriber<string, bool>(IpcCanVisitSameDc).InvokeFunc(here);
+        }
+        catch { return false; }
     }
 }
 

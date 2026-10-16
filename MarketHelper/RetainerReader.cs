@@ -106,6 +106,40 @@ public static unsafe class RetainerReader
     }
 
     /// <summary>
+    /// Like <see cref="FindItemSlot"/> but searches ONLY the open retainer's pages. The Lister must
+    /// use this: a market listing is made from retainer stock, and searching the player's four bags
+    /// first meant that carrying the same item yourself made the Lister target your bag slot (where
+    /// "Put Up for Sale" is not offered) and kept reporting "more stacks remain" forever.
+    /// </summary>
+    public static (InventoryType Type, ushort Slot)? FindRetainerItemSlot(uint itemId)
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return null;
+
+        var containers = new List<InventoryType>
+        {
+            InventoryType.RetainerPage1, InventoryType.RetainerPage2,
+            InventoryType.RetainerPage3, InventoryType.RetainerPage4,
+            InventoryType.RetainerPage5, InventoryType.RetainerPage6,
+            InventoryType.RetainerPage7,
+        };
+
+        foreach (var type in containers)
+        {
+            var inv = im->GetInventoryContainer(type);
+            if (inv == null || !inv->IsLoaded) continue;
+            for (var i = 0; i < inv->Size; i++)
+            {
+                var slot = inv->GetInventorySlot(i);
+                if (slot == null) continue;
+                if (slot->ItemId == itemId && slot->Quantity > 0)
+                    return (type, (ushort)i);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Total units of an item held across the player's four bags (and optionally the open
     /// retainer's pages). Counts QUANTITY, not slots — a stack of 18 counts as 18, which is what
     /// the Lister needs to show "listing 20 /20".

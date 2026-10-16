@@ -13,17 +13,24 @@ namespace MarketHelper;
 /// </summary>
 public static unsafe class RetainerRetrieve
 {
-    // Addon sheet rows for the localized context-menu entries.
-    //  "Retrieve" (move retainer inventory item -> player) is Addon row 97.
-    //  "Return to Inventory" (pull a market listing back to the retainer) is Addon row 98.
+    // Addon sheet rows for the localized context-menu entries. Row ids are locale-independent and
+    // the TEXT is the client's language. Verified against the game's own Addon sheet:
+    //   97  "Entrust to Retainer"        player item -> retainer          (deposit)
+    //   98  "Retrieve from Retainer"     retainer inventory -> player     (withdraw)
+    //   99  "Put Up for Sale"
+    //   958 "Return to Retainer"         market listing -> retainer inventory
+    //   976 "Return Items to Inventory"  market listing -> player inventory
+    // An earlier build had 97/98 the wrong way round, which silently broke retrieval on any
+    // non-English client (the English fallbacks cannot match a localized menu) and left the
+    // listing-return matching on a loose "Return" substring.
     private static string? _retrieve;
     private static string? _returnToInv;
 
     public static string RetrieveText =>
-        _retrieve ??= Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Addon>()?.GetRowOrDefault(97)?.Text.ExtractText() ?? "Retrieve from Retainer";
+        _retrieve ??= Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Addon>()?.GetRowOrDefault(98)?.Text.ExtractText() ?? "Retrieve from Retainer";
 
     public static string ReturnToInventoryText =>
-        _returnToInv ??= Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Addon>()?.GetRowOrDefault(98)?.Text.ExtractText() ?? "Return to Inventory";
+        _returnToInv ??= Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Addon>()?.GetRowOrDefault(958)?.Text.ExtractText() ?? "Return to Retainer";
 
     private static bool IsAgentRetainerActive
     {
@@ -62,7 +69,7 @@ public static unsafe class RetainerRetrieve
 
     /// <summary>Select "Retrieve" by name on the open context menu (moves item to player bags).</summary>
     public static bool SelectRetrieve()
-        => Addons.SelectContextMenuByText(RetrieveText, "Retrieve from Retainer", "Retrieve", "Retrieve All", "Retrieve Item") >= 0;
+        => Addons.SelectContextMenuByText(RetrieveText, "Retrieve from Retainer", "Retrieve All", "Retrieve Item", "Retrieve") >= 0;
 
     /// <summary>The market sell-list window (needed to pull listings back).</summary>
     public static bool RetainerSellListReady => Addons.IsReady("RetainerSellList");
@@ -71,9 +78,13 @@ public static unsafe class RetainerRetrieve
     public static bool OpenMarketItemContext(InventoryType type, ushort slot)
         => RetainerSellListReady && OpenContext(type, slot, "RetainerSellList");
 
-    /// <summary>Select "Return to Inventory" by name (pulls a listing back to retainer inventory).</summary>
+    /// <summary>Select "Return to Retainer" by name (pulls a listing back to retainer inventory).</summary>
+    ///
+    /// Matches the precise rows only. The old "Return" substring matched whichever return entry the
+    /// menu happened to list first, so it could send the listing to the player instead of the
+    /// retainer and wedge the gatherer's next step.
     public static bool SelectReturnToInventory()
-        => Addons.SelectContextMenuByText(ReturnToInventoryText, "Return to Inventory", "Return") >= 0;
+        => Addons.SelectContextMenuByText(ReturnToInventoryText, "Return to Retainer", "Return Items to Inventory") >= 0;
 
     // ---- Deposit / entrust (player inventory -> retainer) ----
 

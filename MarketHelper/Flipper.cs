@@ -29,7 +29,14 @@ public sealed class Flipper
     public string? Error { get; private set; }
     public bool HqOnly;
 
-    public readonly Dictionary<string, Universalis.LocationResult> Results = new();
+    /// <summary>
+    /// Snapshot of the last search, replaced wholesale when a query finishes. Never mutated in
+    /// place: a query completes on the thread pool while the UI thread enumerates this, and a
+    /// Dictionary mutated during enumeration throws. Publishing a fresh instance (a single
+    /// reference assignment) gives readers a stable view instead.
+    /// </summary>
+    public IReadOnlyDictionary<string, Universalis.LocationResult> Results { get; private set; }
+        = new Dictionary<string, Universalis.LocationResult>();
 
     public bool HasResults => Results.Count > 0 && Results.Values.Any(r => r.HasData);
 
@@ -38,7 +45,7 @@ public sealed class Flipper
         ItemId = itemId;
         ItemName = name;
         Error = null;
-        Results.Clear();
+        Results = new Dictionary<string, Universalis.LocationResult>();
         Loading = true;
         _ = RunAsync();
     }
@@ -51,8 +58,11 @@ public sealed class Flipper
                 r => r,
                 r => Universalis.GetListingsAsync(r, ItemId, 10, HqOnly));
             await Task.WhenAll(tasks.Values);
+            // Build off-thread, publish in one assignment — see the Results property.
+            var fresh = new Dictionary<string, Universalis.LocationResult>();
             foreach (var (region, task) in tasks)
-                Results[region] = task.Result;
+                fresh[region] = task.Result;
+            Results = fresh;
         }
         catch (Exception ex)
         {

@@ -29,7 +29,7 @@ public partial class MainWindow
         ImGui.TextColored(ctrl ? Green : Grey, ctrl ? "CTRL held — hover an item to add it." : "Hold CTRL and hover an item to quick-add.");
         if (ctrl && Svc.GameGui.HoveredItem > 0)
         {
-            var id = (uint)(Svc.GameGui.HoveredItem % 1000000);
+            var id = Dalamud.Utility.ItemUtil.GetBaseId((uint)Svc.GameGui.HoveredItem).ItemId;
             if (id > 0 && !Cfg.GathererItems.Contains(id))
             {
                 var name = ItemSearch.FindByIdAny(id);
@@ -42,19 +42,23 @@ public partial class MainWindow
         if (_gathererSearch.Trim().Length >= 2)
         {
             var hits = ItemSearch.FindAny(_gathererSearch);
-            if (hits.Count > 0 && ImGui.BeginChild("##gatheradd", new Vector2(SW(260), SW(120)), true))
+            if (hits.Count > 0)
             {
-                foreach (var h in hits)
+                // EndChild is called unconditionally: BeginChild returning false (the child is fully
+                // clipped) still requires it, or ImGui's window stack is left unbalanced.
+                if (ImGui.BeginChild("##gatheradd", new Vector2(SW(260), SW(120)), true))
                 {
-                    if (ImGui.Selectable($"{h.Name}##gadd{h.Id}"))
+                    foreach (var h in hits)
                     {
-                        if (!Cfg.GathererItems.Contains(h.Id)) { Cfg.GathererItems.Add(h.Id); Cfg.Save(); }
-                        _gathererSearch = string.Empty;
+                        if (ImGui.Selectable($"{h.Name}##gadd{h.Id}"))
+                        {
+                            if (!Cfg.GathererItems.Contains(h.Id)) { Cfg.GathererItems.Add(h.Id); Cfg.Save(); }
+                            _gathererSearch = string.Empty;
+                        }
                     }
                 }
                 ImGui.EndChild();
             }
-            else if (hits.Count == 0) { /* no matches */ }
         }
 
         Dummy(4f);
