@@ -1221,11 +1221,19 @@ public sealed class BuyRunner
             .ThenByDescending(w => w.TotalCost)
             .ToList();
 
+        var firstNewStop = _plan.Stops.Count;
         foreach (var stop in ordered)
         {
             stop.Lines.Sort((a, b) => a.UnitPrice.CompareTo(b.UnitPrice));
             _plan.Stops.Add(stop);
         }
+
+        // CRITICAL: point the cursor at the first appended stop. NextStop increments _stopIdx before
+        // reading, so it must be left one BEFORE that stop - the cursor was already past the end
+        // (Finish ran precisely because it was), so without this every appended stop is skipped and
+        // the run goes home having bought nothing while believing it had extended the plan. This is
+        // exactly why the top-up looked like it never worked.
+        _stopIdx = firstNewStop - 1;
 
         _extensionPasses++;
         var units = ordered.Sum(st => st.TotalUnits);
