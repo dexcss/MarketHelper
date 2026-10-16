@@ -104,10 +104,17 @@ public static class PricingLogic
         var chosen = listings[Math.Min(target, listings.Count - 1)];
 
         // --- Don't undercut my own retainers: match instead of undercut. ---
+        // The general market board does NOT tell us who is selling: CharacterName is empty on
+        // listing rows outside set-sales (confirmed with a live dump, where every row showed an
+        // empty seller). So the old name match could never fire. Match on the retainer ID
+        // instead — board rows carry it and we can read our own retainers' ids from the
+        // InfoProxy. The name match is kept as a fallback.
         if (cfg.DontUndercutMyRetainers)
         {
             var rn = Normalize(chosen.Retainer);
-            if (chosen.IsHq == itemIsHq && cfg.MyRetainers.Contains(rn))
+            var isMine = (chosen.RetainerId != 0 && MarketData.GetMyRetainerIds().Contains(chosen.RetainerId))
+                         || (rn.Length > 0 && cfg.MyRetainers.Contains(rn));
+            if (chosen.IsHq == itemIsHq && isMine)
             {
                 uc = 0;
                 res.MatchedOwnRetainer = true;

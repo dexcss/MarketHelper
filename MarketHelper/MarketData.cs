@@ -124,6 +124,27 @@ public static unsafe class MarketData
         return result;
     }
 
+    /// <summary>
+    /// The current character's retainer ids, as cached by the InfoProxy.
+    ///
+    /// The general market board does NOT identify the seller on a listing row (CharacterName is
+    /// empty outside set-sales — confirmed with a live dump), so this is the only reliable way to
+    /// recognise one of our own listings: match the row's RetainerId against ours.
+    /// </summary>
+    public static HashSet<ulong> GetMyRetainerIds()
+    {
+        var ids = new HashSet<ulong>();
+        var p = GetProxy();
+        if (p == null) return ids;
+        var count = (int)Math.Min(p->PlayerRetainerCount, (uint)p->PlayerRetainers.Length);
+        for (var i = 0; i < count; i++)
+        {
+            var id = p->PlayerRetainers[i].RetainerId;
+            if (id != 0) ids.Add(id);
+        }
+        return ids;
+    }
+
     /// <summary>The player's own retainer names, as cached by the InfoProxy.</summary>
     public static List<string> GetMyRetainerNames()
     {

@@ -304,11 +304,16 @@ public static unsafe class MarketBoard
         public readonly int Quantity;
         public readonly bool Hq;
         public readonly string Seller;
+        public readonly ulong RetainerId;   // seller's retainer, when the game provides it
+        public readonly ulong ListingId;
 
         public long Total => UnitPrice * Quantity;
 
-        public BoardListing(int index, uint itemId, long unit, long tax, int qty, bool hq, string seller)
-        { Index = index; ItemId = itemId; UnitPrice = unit; TotalTax = tax; Quantity = qty; Hq = hq; Seller = seller; }
+        public BoardListing(int index, uint itemId, long unit, long tax, int qty, bool hq, string seller, ulong retainerId, ulong listingId)
+        {
+            Index = index; ItemId = itemId; UnitPrice = unit; TotalTax = tax; Quantity = qty;
+            Hq = hq; Seller = seller; RetainerId = retainerId; ListingId = listingId;
+        }
     }
 
     /// <summary>
@@ -335,7 +340,7 @@ public static unsafe class MarketBoard
             if (l.UnitPrice == 0) continue;
             if (!IsSameItem(l.ItemId, expectedItemId)) continue;
             result.Add(new BoardListing(
-                i, l.ItemId, l.UnitPrice, l.TotalTax, (int)l.Quantity, l.IsHqItem, l.CharacterName.ToString()));
+                i, l.ItemId, l.UnitPrice, l.TotalTax, (int)l.Quantity, l.IsHqItem, l.CharacterName.ToString(), l.RetainerId, l.ListingId));
         }
 
         result.Sort((a, b) => a.UnitPrice.CompareTo(b.UnitPrice));
@@ -557,7 +562,7 @@ public static unsafe class MarketBoard
             for (var i = 0; i < listings.Count && i < 12; i++)
             {
                 var l = listings[i];
-                lines.Add($"  listing rawIdx={l.Index} {l.UnitPrice:N0}g x{l.Quantity} hq={l.Hq} seller={l.Seller}");
+                lines.Add($"  listing rawIdx={l.Index} {l.UnitPrice:N0}g x{l.Quantity} hq={l.Hq} seller=\"{l.Seller}\" retainerId={l.RetainerId} listingId={l.ListingId}");
             }
         }
 
