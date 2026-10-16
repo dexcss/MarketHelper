@@ -172,7 +172,10 @@ public sealed class BuyPlanWindow : Window
         foreach (var it in plan.Items)
         {
             ImGui.TableNextRow();
-            ImGui.TableNextColumn(); ImGui.TextUnformatted(it.ItemName);
+            ImGui.TableNextColumn();
+            MainWindow.DrawItemIconStatic(it.ItemId, SW(18));
+            ImGui.SameLine(0, SW(4));
+            ImGui.TextUnformatted(it.ItemName);
             ImGui.TableNextColumn(); ImGui.TextUnformatted(it.Requested.ToString());
 
             ImGui.TableNextColumn();

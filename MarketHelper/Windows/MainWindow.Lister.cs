@@ -189,6 +189,8 @@ public partial class MainWindow
     /// Item icon for a row, falling back to blank space of the same size so the columns stay
     /// aligned when an icon can't be loaded.
     /// </summary>
+    internal static void DrawItemIconStatic(uint itemId, float size) => DrawItemIcon(itemId, size);
+
     private static void DrawItemIcon(uint itemId, float size)
     {
         var icon = ItemSearch.IconId(itemId);

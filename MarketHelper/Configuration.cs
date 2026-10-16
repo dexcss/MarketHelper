@@ -191,10 +191,15 @@ public class Configuration : IPluginConfiguration
     // This is what answers "nothing at 1,000g — so what DOES it cost?". 0 hides the section.
     public int BuyerShowCheapestCount { get; set; } = 5;
 
-    // How many listings to pull per DATA CENTER per item. Furnishing markets are deep — hundreds
-    // of rows for a popular piece — so this defaults high. Raise it if "Found" comes back short
-    // for something you can see plenty of on Universalis.
-    public int BuyerListingDepth { get; set; } = 200;
+    // How many listings to pull per WORLD per item. 0 means "everything Universalis has", which
+    // is the default and almost always what you want.
+    //
+    // This used to be per DATA CENTER, and that was the bug behind "it only found 9,144 of the
+    // 119,880 I asked for". The cap applies to the whole response, so one request for a whole DC
+    // returned the cheapest N rows across all its worlds and nothing deeper — for an item sold in
+    // x99 stacks, 200 rows is a hard ceiling of ~19,800 units no matter how much is really listed.
+    // The scan now asks each world separately, so every world gets its own budget.
+    public int BuyerListingDepth { get; set; }
 
     // After a real run, rewrite the shopping list to match what's actually left: deduct what was
     // bought from each row's quantity, and untick rows whose order is complete. Stops a second
@@ -284,7 +289,20 @@ public class Configuration : IPluginConfiguration
 
     [NonSerialized] private IDalamudPluginInterface? pluginInterface;
 
-    public void Initialize(IDalamudPluginInterface pi) => pluginInterface = pi;
+    public void Initialize(IDalamudPluginInterface pi)
+    {
+        pluginInterface = pi;
+
+        // v1 -> v2: BuyerListingDepth changed meaning from "rows per data center" to "rows per
+        // world", and gained 0 = unlimited. Anyone still carrying the old 200 default is carrying
+        // a cap that silently truncated bulk orders, so clear it once.
+        if (Version < 2)
+        {
+            if (BuyerListingDepth == 200) BuyerListingDepth = 0;
+            Version = 2;
+            Save();
+        }
+    }
 
     public void Save() => pluginInterface?.SavePluginConfig(this);
 }

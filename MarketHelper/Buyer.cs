@@ -169,7 +169,8 @@ public sealed class Buyer
     /// <summary>Everything the scan needs from the game, read once on the main thread.</summary>
     private sealed class ScanContext
     {
-        public List<string> Locations = new();   // Universalis query targets (world, DC or region)
+        public List<string> Locations = new();     // what the scope selector chose (world/DC names)
+        public List<string> QueryWorlds = new();   // what we actually ASK Universalis for, one per world
         public string CurrentWorld = string.Empty;
         public string CurrentDataCenter = string.Empty;
         public bool LifestreamPresent;
@@ -186,6 +187,47 @@ public sealed class Buyer
         public string ScopeLabel => Locations.Count == 0
             ? "(nothing selected)"
             : string.Join(", ", Locations);
+    }
+
+    /// <summary>
+    /// The worlds a scan will actually query, expanded from whatever the scope selector picked.
+    ///
+    /// The scan used to send one request per DATA CENTER. That looked equivalent and isn't: the
+    /// listings cap is applied per REQUEST, so a DC request returns the cheapest N rows anywhere
+    /// on that DC and nothing else. For a bulk order that is a hard ceiling — ask for 119,880
+    /// units of something sold in x99 stacks and a 200-row DC response can only ever show you
+    /// ~19,800 of them, on whichever handful of worlds happened to be cheapest. Querying each
+    /// world separately gives every world its own full budget, so the deep inventory sitting
+    /// behind the cheap rows finally shows up.
+    /// </summary>
+    public List<string> ResolveQueryWorlds()
+    {
+        var excluded = new HashSet<string>(
+            Cfg.BuyerExcludedWorlds.Where(w => !string.IsNullOrWhiteSpace(w)).Select(w => w.Trim()),
+            StringComparer.OrdinalIgnoreCase);
+
+        var worlds = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var loc in ResolveLocations())
+        {
+            if (string.IsNullOrWhiteSpace(loc)) continue;
+
+            // A data-center name expands into its worlds. Anything that doesn't expand is already
+            // a world (scope mode 0), or a name the game sheet doesn't know — query it as given
+            // rather than silently dropping the user's whole scope.
+            var expanded = WorldInfo.WorldsOnDataCenter(loc);
+            if (expanded.Count == 0) expanded = new List<string> { loc };
+
+            foreach (var w in expanded)
+            {
+                if (string.IsNullOrWhiteSpace(w)) continue;
+                if (excluded.Contains(w)) continue;
+                if (seen.Add(w)) worlds.Add(w);
+            }
+        }
+
+        return worlds;
     }
 
     /// <summary>
@@ -212,8 +254,11 @@ public sealed class Buyer
                 // Expand the region into its data centers rather than querying "North-America"
                 // once. The listing depth is PER QUERY, so a single region call capped the whole
                 // region at one page — for a deep item that's a fraction of what's really listed.
-                // Four DC calls give four times the depth and per-DC failure reporting.
-                var dcs = WorldInfo.DataCentersInRegion(WorldInfo.CurrentRegionId());
+                //
+                // Resolved via the client's own data-center list, falling back to a name table
+                // and only then to the sheet's region id — which under-reported on a Japanese
+                // character, returning Elemental alone instead of all four JP data centers.
+                var dcs = WorldInfo.SiblingDataCenters(WorldInfo.CurrentDataCenter());
                 if (dcs.Count > 0) return dcs;
 
                 var region = WorldInfo.CurrentRegion();
@@ -251,12 +296,15 @@ public sealed class Buyer
             ctx = new ScanContext
             {
                 Locations = ResolveLocations(),
+                QueryWorlds = ResolveQueryWorlds(),
                 CurrentWorld = WorldInfo.CurrentWorld(),
                 CurrentDataCenter = WorldInfo.CurrentDataCenter(),
                 LifestreamPresent = LifestreamBridge.Available,
                 DelayMs = Math.Clamp(Cfg.BuyerScanDelayMs, 0, 2000),
                 CheapestCount = Math.Clamp(Cfg.BuyerShowCheapestCount, 0, 25),
-                Depth = Math.Clamp(Cfg.BuyerListingDepth, 20, 500),
+                // 0 means "no cap — give me everything on this world". Anything else is a
+                // per-WORLD budget now, not a per-data-center one.
+                Depth = Cfg.BuyerListingDepth <= 0 ? 0 : Math.Clamp(Cfg.BuyerListingDepth, 20, 10000),
                 DcPriority = Cfg.BuyerDcPriorityEnabled,
                 DcOrder = Cfg.BuyerDcPriority.Where(d => !string.IsNullOrWhiteSpace(d)).Select(d => d.Trim()).ToList(),
                 WorldToDc = WorldInfo.WorldToDataCenter(),
@@ -281,7 +329,7 @@ public sealed class Buyer
             return;
         }
 
-        if (ctx.Locations.Count == 0)
+        if (ctx.Locations.Count == 0 || ctx.QueryWorlds.Count == 0)
         {
             Error = "Nothing to scan — pick a scope (and in Custom mode, tick at least one data center).";
             Status = Error;
@@ -313,6 +361,61 @@ public sealed class Buyer
             var allowOvershoot = Cfg.BuyerAllowOvershoot;
             var byWorld = new Dictionary<string, WorldStop>(StringComparer.OrdinalIgnoreCase);
 
+            // ---------------------------------------------------------------------------
+            // Fetch phase: one request per WORLD carrying every item on the list.
+            //
+            // Two things changed here and both matter for bulk orders. The listings cap is
+            // applied per request, so asking a whole data center for 200 rows caps the entire
+            // DC at 200 rows no matter how many worlds it has — per-world requests give each
+            // world its own budget. And batching the item ids into one request per world keeps
+            // the call count at (worlds), not (worlds x items): a 46-item list over 32 worlds
+            // is 32 calls instead of 1,472.
+            //
+            // HQ filtering is deliberately NOT sent to the server. It's a per-item setting and
+            // this is a shared request, so the existing client-side HQ filter below does it.
+            // ---------------------------------------------------------------------------
+            var itemIds = items.Select(i => i.ItemId).Distinct().ToList();
+            var byItem = new Dictionary<uint, List<Universalis.Listing>>();
+            foreach (var id in itemIds) byItem[id] = new List<Universalis.Listing>();
+            var worldFailures = new List<string>();
+
+            const int maxParallelWorlds = 6;
+            for (var i = 0; i < ctx.QueryWorlds.Count; i += maxParallelWorlds)
+            {
+                var batch = ctx.QueryWorlds.Skip(i).Take(maxParallelWorlds).ToList();
+                var jobs = batch
+                    .Select(w => (World: w, Task: Universalis.GetListingsMultiAsync(w, itemIds, ctx.Depth)))
+                    .ToList();
+                await Task.WhenAll(jobs.Select(j => j.Task));
+
+                foreach (var (world, job) in jobs)
+                {
+                    var map = job.Result;
+                    string? worldError = null;
+                    foreach (var id in itemIds)
+                    {
+                        if (!map.TryGetValue(id, out var res)) continue;
+                        if (res.Error != null) { worldError ??= res.Error; continue; }
+                        foreach (var l in res.Listings)
+                        {
+                            // A world-scoped response leaves worldName empty — it's implied by
+                            // the endpoint. Fill it in, or every listing gets dropped later for
+                            // having nowhere to route to.
+                            var w = string.IsNullOrWhiteSpace(l.World) ? world : l.World;
+                            byItem[id].Add(new Universalis.Listing(
+                                l.PricePerUnit, l.Quantity, l.Hq, w, l.Retainer, l.ListingId));
+                        }
+                    }
+                    if (worldError != null) worldFailures.Add($"{world} ({worldError})");
+                }
+
+                Status = $"Scanning {Math.Min(i + batch.Count, ctx.QueryWorlds.Count)}/{ctx.QueryWorlds.Count} worlds...";
+                if (ctx.DelayMs > 0) await Task.Delay(ctx.DelayMs);
+            }
+
+            if (worldFailures.Count > 0)
+                result.Warnings.Add($"Lookup failed on {worldFailures.Count} world(s): {string.Join(", ", worldFailures.Take(8))}{(worldFailures.Count > 8 ? ", ..." : "")}.");
+
             foreach (var item in items)
             {
                 var name = ctx.Names.TryGetValue(item.ItemId, out var n) ? n : $"Item #{item.ItemId}";
@@ -328,35 +431,16 @@ public sealed class Buyer
 
                 var cap = item.EffectiveCap;
 
-                // One query per location, fired in parallel — the same shape the Flipper tab has
-                // used reliably for cross-region lookups. Universalis has no "several DCs at once"
-                // endpoint, so in Custom mode the DC list you chose is exactly what gets queried:
-                // nothing wider, nothing you didn't tick.
-                var tasks = ctx.Locations
-                    .Select(loc => (Location: loc, Task: Universalis.GetListingsAsync(loc, item.ItemId, ctx.Depth, item.HqOnly)))
-                    .ToList();
-                await Task.WhenAll(tasks.Select(t => t.Task));
+                // Everything this item got back, from every world in scope. Already fetched above.
+                var merged = byItem.TryGetValue(item.ItemId, out var got)
+                    ? got
+                    : new List<Universalis.Listing>();
 
-                var merged = new List<Universalis.Listing>();
-                var failures = new List<string>();
-                foreach (var (loc, task) in tasks)
-                {
-                    var res = task.Result;
-                    if (res.Error != null) { failures.Add($"{loc} ({res.Error})"); continue; }
-                    merged.AddRange(res.Listings);
-                }
-
-                if (failures.Count > 0)
-                    result.Warnings.Add($"{name}: lookup failed on {string.Join(", ", failures)}.");
-                if (merged.Count == 0 && failures.Count == ctx.Locations.Count)
+                if (merged.Count == 0)
                 {
                     result.Items.Add(summary);
                     continue;
                 }
-
-                // Pace between ITEMS rather than between locations, so a long shopping list can't
-                // machine-gun Universalis even though each item's locations go out together.
-                if (ctx.DelayMs > 0) await Task.Delay(ctx.DelayMs);
 
                 // Own retainers are filtered out — you can't buy from yourself, and one of ours
                 // showing up as "the cheapest" would just wedge the run on that row. Excluded
@@ -453,7 +537,10 @@ public sealed class Buyer
                 foreach (var line in byWorld.Values.SelectMany(st => st.Lines).Where(bl => bl.ItemId == item.ItemId))
                     takenHere.Add($"{line.World}|{line.Seller}|{line.UnitPrice}|{line.Quantity}");
 
-                var spareBudget = 300;
+                // Keep a top-up pool proportional to the order. A flat 300 was fine for a few
+                // dozen furnishings and useless for a five-figure bulk buy, where the planned
+                // listings alone can run past a thousand rows.
+                var spareBudget = Math.Clamp(300 + item.Quantity / 8, 300, 5000);
                 foreach (var l in listings)
                 {
                     if (spareBudget <= 0) break;

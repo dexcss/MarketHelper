@@ -110,9 +110,10 @@ public partial class MainWindow
             return;
         }
 
-        if (ImGui.BeginTable("##buyertable", 7, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        if (ImGui.BeginTable("##buyertable", 8, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
         {
             ImGui.TableSetupColumn("On", ImGuiTableColumnFlags.WidthFixed, SW(30));
+            ImGui.TableSetupColumn("##icon", ImGuiTableColumnFlags.WidthFixed, SW(26));
             ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.0f);
             ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, SW(70));
             ImGui.TableSetupColumn("Cap", ImGuiTableColumnFlags.WidthFixed, SW(34));
@@ -129,6 +130,9 @@ public partial class MainWindow
                 ImGui.TableNextColumn();
                 var on = row.Enabled;
                 if (ImGui.Checkbox($"##on{row.ItemId}", ref on)) { row.Enabled = on; Cfg.Save(); }
+
+                ImGui.TableNextColumn();
+                DrawItemIcon(row.ItemId, SW(22));
 
                 ImGui.TableNextColumn();
                 var name = ItemSearch.FindById(row.ItemId);
@@ -350,7 +354,7 @@ public partial class MainWindow
 
             var dcs = showAll
                 ? WorldInfo.AllDataCenters()
-                : WorldInfo.DataCentersInRegion(WorldInfo.CurrentRegionId());
+                : WorldInfo.SiblingDataCenters(WorldInfo.CurrentDataCenter());
             if (dcs.Count == 0) dcs = WorldInfo.AllDataCenters();
 
             Dummy(2f);
@@ -396,7 +400,7 @@ public partial class MainWindow
             if (ImGui.TreeNode("Skip individual worlds##buyerskip"))
             {
                 var dcs = mode == 2
-                    ? WorldInfo.DataCentersInRegion(WorldInfo.CurrentRegionId())
+                    ? WorldInfo.SiblingDataCenters(WorldInfo.CurrentDataCenter())
                     : new List<string> { here };
                 foreach (var dc in dcs.Where(d => !string.IsNullOrWhiteSpace(d)))
                 {
@@ -411,7 +415,10 @@ public partial class MainWindow
         DrawDcPriority();
 
         var label = string.Join(", ", _plugin.Buyer.ResolveLocations());
+        var queryWorlds = _plugin.Buyer.ResolveQueryWorlds();
         WrapText(Grey, $"Will scan: {(string.IsNullOrWhiteSpace(label) ? "(nothing)" : label)}");
+        if (queryWorlds.Count > 0)
+            WrapText(Grey, $"{queryWorlds.Count} world(s), queried one at a time so each gets its own listing depth.");
         if (Cfg.BuyerExcludedWorlds.Count > 0)
             WrapText(Grey, $"Skipping {Cfg.BuyerExcludedWorlds.Count} world(s): {string.Join(", ", Cfg.BuyerExcludedWorlds)}");
     }
@@ -427,7 +434,7 @@ public partial class MainWindow
         {
             Cfg.BuyerDcPriorityEnabled = on;
             if (on && Cfg.BuyerDcPriority.Count == 0)
-                Cfg.BuyerDcPriority = WorldInfo.DataCentersInRegion(WorldInfo.CurrentRegionId());
+                Cfg.BuyerDcPriority = WorldInfo.SiblingDataCenters(WorldInfo.CurrentDataCenter());
             Cfg.Save();
         }
         ImGui.SameLine(0, SW(6));
@@ -436,7 +443,7 @@ public partial class MainWindow
         if (!on) return;
 
         // Seed from the region if the list is empty or the character moved region.
-        var regionDcs = WorldInfo.DataCentersInRegion(WorldInfo.CurrentRegionId());
+        var regionDcs = WorldInfo.SiblingDataCenters(WorldInfo.CurrentDataCenter());
         foreach (var dc in regionDcs)
             if (!Cfg.BuyerDcPriority.Contains(dc, StringComparer.OrdinalIgnoreCase))
             { Cfg.BuyerDcPriority.Add(dc); Cfg.Save(); }
@@ -597,9 +604,13 @@ public partial class MainWindow
 
         var depth = Cfg.BuyerListingDepth;
         ImGui.SetNextItemWidth(SW(180));
-        if (ImGui.InputInt("Listings to fetch per data center", ref depth, 50)) { Cfg.BuyerListingDepth = Math.Clamp(depth, 20, 500); Cfg.Save(); }
+        if (ImGui.InputInt("Listings to fetch per world (0 = all)", ref depth, 50))
+        {
+            Cfg.BuyerListingDepth = depth <= 0 ? 0 : Math.Clamp(depth, 20, 10000);
+            Cfg.Save();
+        }
         ImGui.SameLine(0, SW(6));
-        HelpMarker("How deep to read each data center's listings. Furnishing markets run to hundreds of rows, so raise this if \"Found\" comes back short for something you can see plenty of on Universalis.");
+        HelpMarker("How deep to read each WORLD's listings. Leave it at 0 unless you have a reason — 0 asks Universalis for everything it has.\n\nThis is a per-request cap, and the scan asks each world separately, so a number here is a ceiling on every single world. A bulk order is the case where it bites: an item sold in stacks of 99 needs over a thousand listings to reach 100,000 units, and a low cap here makes the market look far thinner than it is.");
 
         var topUp = Cfg.BuyerTopUpShortfalls;
         if (ImGui.Checkbox("Keep going if the route finishes short", ref topUp)) { Cfg.BuyerTopUpShortfalls = topUp; Cfg.Save(); }

@@ -69,6 +69,12 @@ public sealed class BuyRunner
     private int _orderTotal;
     private int _stopTarget;
     private int _extensionPasses;
+
+    // Listings that raised a confirmation we refused. Keyed so the same bad row isn't picked
+    // again on the retry — otherwise "try the next cheapest" loops on the same one forever.
+    private readonly HashSet<string> _badListings = new();
+    private string _pickKey = string.Empty;
+    private int _confirmFails;
     private readonly Dictionary<uint, long> _plannedMax = new();
     private int _boughtBeforeStop;
     private int _wantUnits;
@@ -157,6 +163,9 @@ public sealed class BuyRunner
         _stopTarget = 0;
         _boughtBeforeStop = 0;
         _extensionPasses = 0;
+        _badListings.Clear();
+        _pickKey = string.Empty;
+        _confirmFails = 0;
         _wantUnits = 0;
         _hqOnly = false;
 
@@ -538,6 +547,8 @@ public sealed class BuyRunner
 
                 _buysThisItem = 0;
                 _lastListingCount = 0;
+                _badListings.Clear();
+                _confirmFails = 0;
                 var resumed = doneHere > 0 ? $" ({doneHere} of {allocated} already taken here)" : "";
                 Log(_cap == long.MaxValue
                     ? $"{_itemName}: buying this stop's {_wantUnits}{resumed} (no price cap)."
@@ -753,6 +764,7 @@ public sealed class BuyRunner
                 }
 
                 var listings = MarketBoard.Listings(_item)
+                    .Where(l => !_badListings.Contains(ListingKey(l)))
                     .Where(l => l.UnitPrice <= _cap)
                     .Where(l => !_hqOnly || l.Hq)
                     .Where(l => Cfg.BuyerAllowOvershoot || l.Quantity <= remaining)
@@ -772,6 +784,7 @@ public sealed class BuyRunner
                 }
 
                 var pick = listings[0];
+                _pickKey = ListingKey(pick);
                 _expectedTotal = pick.Total;
                 _expectedQty = pick.Quantity;
 
@@ -865,10 +878,28 @@ public sealed class BuyRunner
                 var text = MarketBoard.ReadConfirmText();
                 if (!ConfirmMatches(text, out var reason))
                 {
+                    // Decline and move DOWN the list rather than ending the run. One bad row —
+                    // a stale listing, a row-order mismatch, something over your ceiling — says
+                    // nothing about the next cheapest one, and stopping the whole route over it
+                    // leaves the rest of the order unbought for no good reason.
                     MarketBoard.AnswerConfirm(false);
                     Note(AuditKind.Refused, $"answered No — {reason}. Dialog: {Trim(text)}",
                         _itemName, _expectedQty, 0, _expectedTotal);
-                    SetError($"Purchase confirmation didn't match ({reason}). Answered No and stopped. Dialog said: {Trim(text)}");
+
+                    if (!string.IsNullOrEmpty(_pickKey)) _badListings.Add(_pickKey);
+                    _confirmFails++;
+
+                    if (_confirmFails > 3)
+                    {
+                        Log($"{_itemName}: {_confirmFails} listings in a row wouldn't confirm — moving on. Last reason: {reason}");
+                        State = BuyState.NextItem;
+                        return;
+                    }
+
+                    Log($"{_itemName}: skipped a listing ({reason}) — trying the next cheapest.");
+                    _ticks = 0;
+                    Wait(600);
+                    State = BuyState.PickListing;
                     return;
                 }
 
@@ -996,6 +1027,10 @@ public sealed class BuyRunner
 
     private int UnitsBoughtFor(uint itemId)
         => Tally.TryGetValue(itemId, out var n) ? n : 0;
+
+    /// <summary>Identity of a listing for the refused-row blacklist.</summary>
+    private static string ListingKey(MarketBoard.BoardListing l)
+        => $"{l.Index}|{l.UnitPrice}|{l.Quantity}|{l.Seller}";
 
     private static string SimKey(MarketBoard.BoardListing l)
         => $"{l.Index}|{l.UnitPrice}|{l.Quantity}|{l.Seller}";
@@ -1135,13 +1170,30 @@ public sealed class BuyRunner
         var total = MarketBoard.LargestNumberIn(text);
         if (total < 0) { reason = "no price could be read from it"; return false; }
 
-        // Buyer tax adds up to ~5%; allow a little headroom plus rounding.
-        var ceiling = (long)(_expectedTotal * 1.10) + 100;
+        // What matters is your PRICE CEILING, not the figure we predicted. The proxy row we
+        // clicked can disagree with the board's own row order, so the dialog sometimes names a
+        // different (dearer) listing than expected — that is fine as long as it's still inside the
+        // cap you set. Judging only against the prediction refused perfectly good purchases.
+        // Buyer tax adds ~5%; allow headroom plus rounding on both figures.
+        var predicted = (long)(_expectedTotal * 1.10) + 100;
+        var ceiling = predicted;
+        if (_cap != long.MaxValue)
+        {
+            var capTotal = (long)(_cap * (double)Math.Max(1, _expectedQty) * 1.10) + 100;
+            if (capTotal > ceiling) ceiling = capTotal;
+        }
+
         if (total > ceiling)
         {
-            reason = $"it asks for {total:N0}g but we expected at most {ceiling:N0}g";
+            reason = _cap == long.MaxValue
+                ? $"it asks for {total:N0}g but we expected at most {predicted:N0}g"
+                : $"it asks for {total:N0}g, over your ceiling of {ceiling:N0}g ({_capReason})";
             return false;
         }
+
+        if (total > predicted)
+            Log($"{_itemName}: board asked {total:N0}g rather than the {_expectedTotal:N0}g the scan showed — still within your ceiling, buying.");
+
         return true;
     }
 

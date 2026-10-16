@@ -85,7 +85,7 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(Command, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open Market Helper. Subcommands: run / stop / now / dump / buydump / buytry / buylearn.",
+            HelpMessage = "Open Market Helper. Subcommands: run / stop / now / dump / dcdump / buydump / buytry / buylearn.",
         });
         foreach (var alias in OpenAliases)
         {
@@ -141,6 +141,13 @@ public sealed class Plugin : IDalamudPlugin
             Config.BuyerLearnEvents = !Config.BuyerLearnEvents;
             Config.Save();
             Buy.ApplyLearnMode();
+        }
+        else if (args == "dcdump")
+        {
+            // Diagnostic: what the client's own world sheet says about every data center, and
+            // which ones we'd treat as "my whole region".
+            foreach (var line in WorldInfo.DumpDataCenters())
+                Chat($"[Market Helper] {line}");
         }
         else if (args == "buydump")
         {
