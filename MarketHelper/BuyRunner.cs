@@ -75,6 +75,14 @@ public sealed class BuyRunner
     private readonly HashSet<string> _badListings = new();
     private string _pickKey = string.Empty;
     private int _confirmFails;
+
+    /// <summary>
+    /// "world|itemId" pairs that already came up empty from the LIVE board this run. The scan is a
+    /// snapshot; once a world has been visited and had nothing buyable for an item, appending
+    /// another top-up stop there just burns travel and confirm attempts on rows the game no longer
+    /// sells. Cleared per run.
+    /// </summary>
+    private readonly HashSet<string> _fruitless = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<uint, long> _plannedMax = new();
     private int _boughtBeforeStop;
     private int _wantUnits;
@@ -186,6 +194,7 @@ public sealed class BuyRunner
         _boughtBeforeStop = 0;
         _extensionPasses = 0;
         _badListings.Clear();
+        _fruitless.Clear();
         _pickKey = string.Empty;
         _confirmFails = 0;
         _wantUnits = 0;
@@ -861,6 +870,9 @@ public sealed class BuyRunner
                         ? " The game only sells a listing whole — turn on 'Buy oversized stacks' in Buyer settings if you want the remainder anyway."
                         : string.Empty;
 
+                    // Remember that this world had nothing buyable for this item, so the top-up does
+                    // not append another stop here.
+                    _fruitless.Add(FruitlessKey(_stop?.World ?? string.Empty, _item));
                     Log($"{_itemName}: no buyable listing here ({boughtSoFar}/{_orderTotal} bought overall). {why}.{hint}");
                     Note(AuditKind.Skip, _cap == long.MaxValue
                         ? $"no buyable listing — {why}"
@@ -1118,6 +1130,9 @@ public sealed class BuyRunner
     private static string ListingKey(MarketBoard.BoardListing l)
         => $"{l.Index}|{l.UnitPrice}|{l.Quantity}|{l.Seller}";
 
+    /// <summary>Key for "this world already had nothing buyable for this item this run".</summary>
+    private static string FruitlessKey(string world, uint itemId) => $"{world}|{itemId}";
+
     private static string SimKey(MarketBoard.BoardListing l)
         => $"{l.Index}|{l.UnitPrice}|{l.Quantity}|{l.Seller}";
 
@@ -1159,6 +1174,7 @@ public sealed class BuyRunner
         var newStops = new Dictionary<string, WorldStop>(StringComparer.OrdinalIgnoreCase);
         var tooDear = 0;
         var skippedTooBig = 0;
+        var skippedTried = 0;
 
         foreach (var summary in _plan.Items)
         {
@@ -1191,6 +1207,15 @@ public sealed class BuyRunner
                     continue;
                 }
 
+                // Already visited this world for this item and it had nothing buyable — don't spend
+                // another round trip and four confirm attempts learning the same thing.
+                if (_fruitless.Contains(FruitlessKey(next.World, summary.ItemId)))
+                {
+                    summary.Spare.RemoveAt(0);
+                    skippedTried++;
+                    continue;
+                }
+
                 summary.Spare.RemoveAt(0);                                  // consumed, never reused
 
                 if (!newStops.TryGetValue(next.World, out var stop))
@@ -1207,8 +1232,8 @@ public sealed class BuyRunner
         {
             if (tooDear > 0)
                 Log($"Top-up skipped: the remaining listings are above the price rail (plan +{Cfg.BuyerTopUpMaxOverPlanPercent}%). Re-scan if you want them at current prices.");
-            else if (skippedTooBig > 0)
-                Log($"Top-up skipped: {skippedTooBig} remaining listing(s) are bigger than what's still needed, and the game only sells a listing whole. Re-scan to find smaller stacks, or turn on 'Buy oversized stacks' in Buyer settings.");
+            else if (skippedTooBig > 0 || skippedTried > 0)
+                Log($"Top-up skipped: nothing left that can actually be bought ({skippedTried} listing(s) on worlds already tried and found empty, {skippedTooBig} bigger than what's still needed, and the game only sells a listing whole). Re-scan to refresh prices.");
             return false;
         }
 
@@ -1238,8 +1263,9 @@ public sealed class BuyRunner
         _extensionPasses++;
         var units = ordered.Sum(st => st.TotalUnits);
         var cost = ordered.Sum(st => st.TotalCost);
-        var tooBigNote = skippedTooBig > 0 ? $"; skipped {skippedTooBig} listing(s) bigger than what was still needed" : "";
-        Log($"Still short — top-up pass {_extensionPasses}: {units} more unit(s) from the next cheapest listings across {ordered.Count} world(s), about {cost:N0}g{tooBigNote}.");
+        var tooBigNote = skippedTooBig > 0 ? $"; skipped {skippedTooBig} bigger than needed" : "";
+        var triedNote = skippedTried > 0 ? $"; skipped {skippedTried} on worlds already found empty" : "";
+        Log($"Still short — top-up pass {_extensionPasses}: {units} more unit(s) from the next cheapest listings across {ordered.Count} world(s), about {cost:N0}g{tooBigNote}{triedNote}.");
         Note(AuditKind.Item, $"top-up pass {_extensionPasses}: {units} unit(s) across {ordered.Count} world(s)",
             qty: units, expected: cost);
         return true;
