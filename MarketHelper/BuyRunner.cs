@@ -596,6 +596,25 @@ public sealed class BuyRunner
                     }
                 }
 
+                // Absolute sanity ceiling, applied EVEN TO UNCAPPED items: never pay more than N
+                // times the cheapest price the scan saw for this item, wherever that listing was.
+                // A plan built from stale Universalis data can otherwise point the run at a market
+                // that has moved, and this is the hard backstop that stops a 100g item being bought
+                // at 1M. It can only ever TIGHTEN the cap above, never loosen it.
+                if (!_capped)
+                {
+                    var cheapestScanned = _plan?.Items.FirstOrDefault(i => i.ItemId == _item)?.CheapestPrice ?? 0;
+                    if (cheapestScanned > 0 && Cfg.BuyerSanityCeilingMultiple > 0)
+                    {
+                        var sanity = cheapestScanned * Cfg.BuyerSanityCeilingMultiple;
+                        if (sanity < _cap)
+                        {
+                            _cap = sanity;
+                            _capReason = $"sanity ceiling ({cheapestScanned:N0}g cheapest x{Cfg.BuyerSanityCeilingMultiple})";
+                        }
+                    }
+                }
+
                 _buysThisItem = 0;
                 _lastListingCount = 0;
                 _badListings.Clear();

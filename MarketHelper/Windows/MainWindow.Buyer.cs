@@ -642,6 +642,13 @@ public partial class MainWindow
             if (ImGui.InputInt("Uncapped price rail (% over plan)", ref overPlan, 5)) { Cfg.BuyerTopUpMaxOverPlanPercent = Math.Clamp(overPlan, 0, 500); Cfg.Save(); }
             ImGui.SameLine(0, SW(6));
             HelpMarker("For items with NO price cap: the dearest price the plan budgeted is the most you were ever willing to pay, so it won't go past that plus this percentage. Keeps a run from taking a 1.8M listing while a 975k one waits two stops away. 0 removes the rail; items with their own cap ignore it.");
+
+            var sanityMult = Cfg.BuyerSanityCeilingMultiple;
+            ImGui.SetNextItemWidth(SW(180));
+            if (ImGui.InputInt("Sanity ceiling (x cheapest scanned)", ref sanityMult, 1))
+            { Cfg.BuyerSanityCeilingMultiple = Math.Max(0, sanityMult); Cfg.Save(); }
+            ImGui.SameLine(0, SW(6));
+            HelpMarker("Hard backstop that applies even with NO price cap: never pay more than this many times the cheapest price the scan found for the item. 10 means an item whose cheapest listing was 100g can never be bought above 1,000g, whatever the live board shows. Set 0 to disable.");
         }
 
         var audit = Cfg.BuyerWriteAuditLog;

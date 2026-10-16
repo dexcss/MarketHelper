@@ -224,6 +224,12 @@ public class Configuration : IPluginConfiguration
     // Items with their own price cap ignore this — the cap governs.
     public int BuyerTopUpMaxOverPlanPercent { get; set; } = 10;
 
+    // Built-in sanity net that applies EVEN WHEN an item has no price cap: never pay more than this
+    // many times the cheapest price the scan found for the item, wherever that listing was. 10 =
+    // never pay more than 10x the cheapest. 0 disables it. This is the hard backstop that stops a
+    // stale plan from paying 1M for something the market was selling at 100g.
+    public int BuyerSanityCeilingMultiple { get; set; } = 10;
+
     // Write a CSV audit trail of every run to the plugin config folder (buyer-logs), so a run can
     // be checked over afterwards instead of scrolled back through in chat.
     public bool BuyerWriteAuditLog { get; set; } = true;
