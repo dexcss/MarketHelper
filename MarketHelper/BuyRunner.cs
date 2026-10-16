@@ -129,7 +129,19 @@ public sealed class BuyRunner
             foreach (var line in stop.Lines)
                 if (!_plannedMax.TryGetValue(line.ItemId, out var cur) || line.UnitPrice > cur)
                     _plannedMax[line.ItemId] = line.UnitPrice;
-        _homeWorld = string.IsNullOrWhiteSpace(Cfg.BuyerHomeWorld) ? WorldInfo.CurrentWorld() : Cfg.BuyerHomeWorld.Trim();
+        // Where to return to when the run finishes. The manual override wins; otherwise the
+        // character's HOME world — NOT the world the run happened to start on, which is wrong
+        // whenever you were visiting another world when you pressed SEND.
+        var manual = Cfg.BuyerHomeWorld?.Trim();
+        if (!string.IsNullOrWhiteSpace(manual))
+        {
+            _homeWorld = manual;
+        }
+        else
+        {
+            _homeWorld = WorldInfo.HomeWorld();
+            if (string.IsNullOrWhiteSpace(_homeWorld)) _homeWorld = WorldInfo.CurrentWorld();
+        }
 
         // Ask Lifestream once whether it can answer "can I visit this world?". Its world sets are
         // built at login and fixed for the session, so one probe covers the whole run. If it can't

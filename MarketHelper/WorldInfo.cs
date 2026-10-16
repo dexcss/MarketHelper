@@ -17,12 +17,23 @@ public static class WorldInfo
 {
     /// <summary>
     /// The world the player is standing on right now, or empty if unavailable. During a world visit
-    /// this is NOT the home world — callers that mean "home" should read Player.Object.HomeWorld.
+    /// this is NOT the home world — callers that mean "home" should read <see cref="HomeWorld"/>.
     /// </summary>
     public static string CurrentWorld()
     {
         if (!Player.Available) return string.Empty;
         return Player.Object.CurrentWorld.Value.Name.ExtractText();
+    }
+
+    /// <summary>
+    /// The world the character actually lives on, or empty if unavailable. This is what "return
+    /// home" means: it is NOT the same as <see cref="CurrentWorld"/> whenever the character is
+    /// visiting another world.
+    /// </summary>
+    public static string HomeWorld()
+    {
+        if (!Player.Available) return string.Empty;
+        return Player.Object.HomeWorld.Value.Name.ExtractText();
     }
 
     /// <summary>The data center name for the player's current world, or empty.</summary>

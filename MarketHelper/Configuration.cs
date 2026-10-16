@@ -231,9 +231,11 @@ public class Configuration : IPluginConfiguration
     // Politeness gap between Universalis calls when scanning several DCs at once.
     public int BuyerScanDelayMs { get; set; } = 120;
 
-    // A market listing must be bought whole. When on, a stack larger than what you still need is
-    // still bought; when off, oversized stacks are skipped.
-    public bool BuyerAllowOvershoot { get; set; } = true;
+    // A market listing must be bought whole. When on, a listing bigger than what you still need is
+    // bought anyway (you take the entire listing). OFF BY DEFAULT: the Buyer is a shopping list —
+    // "I want 5" must never turn into "I bought 99". Turn on only if you'd rather take a whole
+    // listing than skip it.
+    public bool BuyerAllowOvershoot { get; set; } = false;
 
     // Hard wallet guards. The reserve is never spent below; the per-run ceiling caps one SEND.
     public long BuyerGilReserve { get; set; } = 100_000;
@@ -300,6 +302,16 @@ public class Configuration : IPluginConfiguration
         {
             if (BuyerListingDepth == 200) BuyerListingDepth = 0;
             Version = 2;
+            Save();
+        }
+
+        // v2 -> v3: BuyerAllowOvershoot used to default to ON, which meant "I want 5" could buy an
+        // entire 99-stack (a real 99m-gil accident waiting to happen). Reset everyone to the safe
+        // default; anyone who genuinely wants whole-listing buys can re-tick it, now knowingly.
+        if (Version < 3)
+        {
+            BuyerAllowOvershoot = false;
+            Version = 3;
             Save();
         }
     }

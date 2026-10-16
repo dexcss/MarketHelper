@@ -663,7 +663,7 @@ public partial class MainWindow
         var overshoot = Cfg.BuyerAllowOvershoot;
         if (ImGui.Checkbox("Buy oversized stacks", ref overshoot)) { Cfg.BuyerAllowOvershoot = overshoot; Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
-        HelpMarker("Market listings can only be bought whole. ON: a stack of 50 is bought even if you only asked for 10. OFF: oversized stacks are skipped, which may leave your order unfilled.");
+        HelpMarker("Market listings are bought whole. OFF (default): a listing bigger than what you still need is skipped, so \"I want 5\" never turns into \"I bought 99\". ON: you take the entire listing — with a 99-stack at 1M each that's 99M gil, so only turn this on if you really mean it.");
 
         var reserve = (int)Math.Min(Cfg.BuyerGilReserve, int.MaxValue);
         ImGui.SetNextItemWidth(SW(180));
@@ -678,11 +678,13 @@ public partial class MainWindow
         if (ImGui.InputInt("Stop with this many bag slots left", ref slots, 1)) { Cfg.BuyerMinFreeSlots = Math.Clamp(slots, 0, 30); Cfg.Save(); }
 
         var home = Cfg.BuyerReturnHome;
-        if (ImGui.Checkbox("Return to my starting world when done", ref home)) { Cfg.BuyerReturnHome = home; Cfg.Save(); }
+        if (ImGui.Checkbox("Return to my home world when done", ref home)) { Cfg.BuyerReturnHome = home; Cfg.Save(); }
 
         var homeWorld = Cfg.BuyerHomeWorld;
         ImGui.SetNextItemWidth(SW(180));
-        if (ImGui.InputTextWithHint("Home world", "blank = where the run started", ref homeWorld, 40)) { Cfg.BuyerHomeWorld = homeWorld; Cfg.Save(); }
+        if (ImGui.InputTextWithHint("Home world", "blank = your home world (auto-detected)", ref homeWorld, 40)) { Cfg.BuyerHomeWorld = homeWorld; Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Manual override for where the Buyer goes after a run. Leave blank to go back to the world this character lives on. Type a world name to be sent somewhere else instead.");
 
         var nav = Cfg.BuyerUseNavmesh;
         if (ImGui.Checkbox("Let vnavmesh walk me to the market board", ref nav)) { Cfg.BuyerUseNavmesh = nav; Cfg.Save(); }

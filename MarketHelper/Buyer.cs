@@ -377,44 +377,68 @@ public sealed class Buyer
             var itemIds = items.Select(i => i.ItemId).Distinct().ToList();
             var byItem = new Dictionary<uint, List<Universalis.Listing>>();
             foreach (var id in itemIds) byItem[id] = new List<Universalis.Listing>();
-            var worldFailures = new List<string>();
+            var failedWorlds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var failureDetails = new List<string>();
 
             const int maxParallelWorlds = 6;
-            for (var i = 0; i < ctx.QueryWorlds.Count; i += maxParallelWorlds)
-            {
-                var batch = ctx.QueryWorlds.Skip(i).Take(maxParallelWorlds).ToList();
-                var jobs = batch
-                    .Select(w => (World: w, Task: Universalis.GetListingsMultiAsync(w, itemIds, ctx.Depth)))
-                    .ToList();
-                await Task.WhenAll(jobs.Select(j => j.Task));
 
-                foreach (var (world, job) in jobs)
+            async Task FetchWorlds(List<string> worlds, string label)
+            {
+                for (var i = 0; i < worlds.Count; i += maxParallelWorlds)
                 {
-                    var map = job.Result;
-                    string? worldError = null;
-                    foreach (var id in itemIds)
+                    var batch = worlds.Skip(i).Take(maxParallelWorlds).ToList();
+                    var jobs = batch
+                        .Select(w => (World: w, Task: Universalis.GetListingsMultiAsync(w, itemIds, ctx.Depth)))
+                        .ToList();
+                    await Task.WhenAll(jobs.Select(j => j.Task));
+
+                    foreach (var (world, job) in jobs)
                     {
-                        if (!map.TryGetValue(id, out var res)) continue;
-                        if (res.Error != null) { worldError ??= res.Error; continue; }
-                        foreach (var l in res.Listings)
+                        var map = job.Result;
+                        string? worldError = null;
+                        foreach (var id in itemIds)
                         {
-                            // A world-scoped response leaves worldName empty — it's implied by
-                            // the endpoint. Fill it in, or every listing gets dropped later for
-                            // having nowhere to route to.
-                            var w = string.IsNullOrWhiteSpace(l.World) ? world : l.World;
-                            byItem[id].Add(new Universalis.Listing(
-                                l.PricePerUnit, l.Quantity, l.Hq, w, l.Retainer, l.ListingId));
+                            if (!map.TryGetValue(id, out var res)) continue;
+                            if (res.Error != null) { worldError ??= res.Error; continue; }
+                            foreach (var l in res.Listings)
+                            {
+                                // A world-scoped response leaves worldName empty — it's implied by
+                                // the endpoint. Fill it in, or every listing gets dropped later for
+                                // having nowhere to route to.
+                                var w = string.IsNullOrWhiteSpace(l.World) ? world : l.World;
+                                byItem[id].Add(new Universalis.Listing(
+                                    l.PricePerUnit, l.Quantity, l.Hq, w, l.Retainer, l.ListingId));
+                            }
+                        }
+                        if (worldError != null)
+                        {
+                            failedWorlds.Add(world);
+                            failureDetails.Add($"{world} ({worldError})");
                         }
                     }
-                    if (worldError != null) worldFailures.Add($"{world} ({worldError})");
-                }
 
-                Status = $"Scanning {Math.Min(i + batch.Count, ctx.QueryWorlds.Count)}/{ctx.QueryWorlds.Count} worlds...";
-                if (ctx.DelayMs > 0) await Task.Delay(ctx.DelayMs);
+                    Status = $"{label} {Math.Min(i + batch.Count, worlds.Count)}/{worlds.Count} worlds...";
+                    if (ctx.DelayMs > 0) await Task.Delay(ctx.DelayMs);
+                }
             }
 
-            if (worldFailures.Count > 0)
-                result.Warnings.Add($"Lookup failed on {worldFailures.Count} world(s): {string.Join(", ", worldFailures.Take(8))}{(worldFailures.Count > 8 ? ", ..." : "")}.");
+            await FetchWorlds(ctx.QueryWorlds, "Scanning");
+
+            // One retry pass for worlds that failed. Universalis answers bursts of HTTP 504 under
+            // load, and a failed world is a world we know NOTHING about — the plan would understate
+            // what is actually available and the route would skip real stock. A short pause and a
+            // single retry recovers most of them.
+            if (failedWorlds.Count > 0)
+            {
+                var retryWorlds = failedWorlds.ToList();
+                failedWorlds.Clear();
+                Status = $"Retrying {retryWorlds.Count} world(s) that failed...";
+                await Task.Delay(Math.Max(600, ctx.DelayMs * 3));
+                await FetchWorlds(retryWorlds, "Retrying");
+            }
+
+            if (failedWorlds.Count > 0)
+                result.Warnings.Add($"Lookup failed on {failedWorlds.Count} world(s) even after a retry: {string.Join(", ", failureDetails.Take(8))}{(failureDetails.Count > 8 ? ", ..." : "")}.");
 
             foreach (var item in items)
             {
