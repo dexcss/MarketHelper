@@ -564,6 +564,13 @@ public static unsafe class MarketBoard
                 var l = listings[i];
                 lines.Add($"  listing rawIdx={l.Index} {l.UnitPrice:N0}g x{l.Quantity} hq={l.Hq} seller=\"{l.Seller}\" retainerId={l.RetainerId} listingId={l.ListingId}");
             }
+
+            // The own-retainer protection matches board rows against these. Printing both sides in
+            // the same dump is what proves (or disproves) that the two id spaces line up.
+            var myNames = MarketData.GetMyRetainerNames();
+            var myIds = MarketData.GetMyRetainerIds();
+            lines.Add($"My retainers ({myNames.Count}): {string.Join(", ", myNames)}");
+            lines.Add($"My retainer ids ({myIds.Count}): {string.Join(", ", myIds)}");
         }
 
         var confirm = ReadConfirmText();
