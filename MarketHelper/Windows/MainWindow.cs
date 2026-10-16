@@ -75,32 +75,35 @@ public partial class MainWindow : Window
     /// <summary>The Undercut tab: the run section plus its sub-tabs (Settings/Overrides/etc).</summary>
     private void DrawUndercutTab()
     {
+        SectionHeader("Undercut run");
         DrawRunSection();
-        ImGui.Separator();
 
-        if (ImGui.BeginTabBar("##undercut_subtabs"))
+        if (ImGui.CollapsingHeader("Undercut settings, overrides and report"))
         {
-            if (ImGui.BeginTabItem("Settings"))
+            if (ImGui.BeginTabBar("##undercut_subtabs"))
             {
-                DrawSettingsTab();
-                ImGui.EndTabItem();
+                if (ImGui.BeginTabItem("Settings"))
+                {
+                    DrawSettingsTab();
+                    ImGui.EndTabItem();
+                }
+                if (ImGui.BeginTabItem("Overrides"))
+                {
+                    DrawOverridesTab();
+                    ImGui.EndTabItem();
+                }
+                if (ImGui.BeginTabItem("My Retainers"))
+                {
+                    DrawRetainersTab();
+                    ImGui.EndTabItem();
+                }
+                if (ImGui.BeginTabItem("Report"))
+                {
+                    DrawReportTab();
+                    ImGui.EndTabItem();
+                }
+                ImGui.EndTabBar();
             }
-            if (ImGui.BeginTabItem("Overrides"))
-            {
-                DrawOverridesTab();
-                ImGui.EndTabItem();
-            }
-            if (ImGui.BeginTabItem("My Retainers"))
-            {
-                DrawRetainersTab();
-                ImGui.EndTabItem();
-            }
-            if (ImGui.BeginTabItem("Report"))
-            {
-                DrawReportTab();
-                ImGui.EndTabItem();
-            }
-            ImGui.EndTabBar();
         }
     }
 

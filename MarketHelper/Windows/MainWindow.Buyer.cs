@@ -454,35 +454,40 @@ public partial class MainWindow
             if (!Cfg.BuyerDcPriority.Contains(dc, StringComparer.OrdinalIgnoreCase))
             { Cfg.BuyerDcPriority.Add(dc); Cfg.Save(); }
 
-        Dummy(2f);
-        ImGui.TextColored(Grey, "Order (top first):");
+        // Drop anything the client no longer knows about (renamed / removed data center).
+        Cfg.BuyerDcPriority.RemoveAll(dc => !regionDcs.Contains(dc, StringComparer.OrdinalIgnoreCase));
 
-        int? moveUp = null, moveDown = null;
+        Dummy(2f);
+        ImGui.TextColored(Grey, "Visit order (pick a data center for each position):");
+
+        // One dropdown per position. Picking a data centre that's already used elsewhere SWAPS the
+        // two positions, so the list always stays a valid permutation and never gains a duplicate.
         for (var i = 0; i < Cfg.BuyerDcPriority.Count; i++)
         {
-            var dc = Cfg.BuyerDcPriority[i];
-            using (ImRaiiDisabled(i == 0))
+            var current = Cfg.BuyerDcPriority[i];
+            ImGui.Text($"{i + 1}.");
+            ImGui.SameLine(0, SW(4));
+            ImGui.SetNextItemWidth(SW(190));
+            if (ImGui.BeginCombo($"##dcprio{i}", current))
             {
-                if (ImGui.SmallButton($"^##up{dc}")) moveUp = i;
+                foreach (var dc in regionDcs)
+                {
+                    var isThis = string.Equals(dc, current, StringComparison.OrdinalIgnoreCase);
+                    var used = !isThis && Cfg.BuyerDcPriority.Contains(dc, StringComparer.OrdinalIgnoreCase);
+                    if (ImGui.Selectable(used ? $"{dc}   (in use)" : dc, isThis))
+                    {
+                        var j = Cfg.BuyerDcPriority.FindIndex(x => string.Equals(x, dc, StringComparison.OrdinalIgnoreCase));
+                        if (j >= 0)
+                        {
+                            (Cfg.BuyerDcPriority[i], Cfg.BuyerDcPriority[j]) =
+                                (Cfg.BuyerDcPriority[j], Cfg.BuyerDcPriority[i]);
+                            Cfg.Save();
+                        }
+                    }
+                    if (isThis) ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
             }
-            ImGui.SameLine(0, SW(3));
-            using (ImRaiiDisabled(i == Cfg.BuyerDcPriority.Count - 1))
-            {
-                if (ImGui.SmallButton($"v##down{dc}")) moveDown = i;
-            }
-            ImGui.SameLine(0, SW(8));
-            ImGui.TextUnformatted($"{i + 1}. {dc}");
-        }
-
-        if (moveUp is int u && u > 0)
-        {
-            (Cfg.BuyerDcPriority[u - 1], Cfg.BuyerDcPriority[u]) = (Cfg.BuyerDcPriority[u], Cfg.BuyerDcPriority[u - 1]);
-            Cfg.Save();
-        }
-        if (moveDown is int d && d < Cfg.BuyerDcPriority.Count - 1)
-        {
-            (Cfg.BuyerDcPriority[d + 1], Cfg.BuyerDcPriority[d]) = (Cfg.BuyerDcPriority[d], Cfg.BuyerDcPriority[d + 1]);
-            Cfg.Save();
         }
 
         Dummy(2f);

@@ -56,6 +56,7 @@ public partial class MainWindow
 
         Dummy(4f);
 
+        SectionHeader("Cross-region flip");
         if (Flip.Loading)
         {
             ImGui.TextColored(Gold, $"Searching markets for {Flip.ItemName}...");
@@ -124,7 +125,7 @@ public partial class MainWindow
         }
 
         // --- Tax controls ---
-        Dummy(2f);
+        SectionHeader("Tax settings");
         var sellerTax = Cfg.ApplySellerTax;
         if (ImGui.Checkbox("Seller tax", ref sellerTax)) { Cfg.ApplySellerTax = sellerTax; Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
@@ -153,6 +154,7 @@ public partial class MainWindow
         ImGui.Separator();
 
         // --- Per-region columns ---
+        SectionHeader("Listings per region");
         if (ImGui.BeginTable("##flipregions", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
         {
             foreach (var region in Flipper.Regions)
