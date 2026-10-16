@@ -168,7 +168,9 @@ public sealed class Plugin : IDalamudPlugin
                 Chat($"[Market Helper] Dumping {count} rows:");
                 Chat($"[Market Helper] {Addons.DumpSellListRow(-1)}");
                 for (var i = 0; i < count && i < 20; i++)
-                    Chat($"[Market Helper] row {i}: mannequin={Addons.IsSellListRowMannequin(i)}");
+                    Chat($"[Market Helper] row {i}: mannequin={Addons.IsSellListRowMannequin(i)?.ToString() ?? "UNKNOWN"}");
+                foreach (var line in Addons.DumpSellListRows())
+                    Chat($"[Market Helper] {line}");
             }
         }
         else

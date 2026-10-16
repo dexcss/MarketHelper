@@ -356,14 +356,22 @@ public sealed class NavRunner
                 // entry can delist it, so we never open them.
                 if (Cfg.SkipMannequinItems)
                 {
-                    var isMannequinRow = Addons.IsSellListRowMannequin(_itemSlot);
+                    // Tri-state: true = mannequin, false = a normal row we could read, null = the
+                    // row could not be verified (no node rendered for it, or the structure has
+                    // drifted). Null MUST be treated as "do not open" — returning false there was
+                    // the fail-open that let a mannequin row be opened and delisted.
+                    var mannequinState = Addons.IsSellListRowMannequin(_itemSlot);
                     var slotPrice = RetainerReader.MarketPriceAtSlot(_itemSlot);
                     var overThreshold = Cfg.MannequinUsePriceFallback && slotPrice >= (ulong)Cfg.MannequinPriceThreshold;
                     if (Cfg.Verbose)
-                        _plugin.Chat($"[Market Helper] slot {_itemSlot}: icon={isMannequinRow}, price={slotPrice:N0}");
-                    if (isMannequinRow || overThreshold)
+                        _plugin.Chat($"[Market Helper] slot {_itemSlot}: icon={mannequinState?.ToString() ?? "UNKNOWN"}, price={slotPrice:N0}");
+                    if (mannequinState != false || overThreshold)
                     {
-                        var why = isMannequinRow ? "mannequin icon" : $"{slotPrice:N0}g over threshold";
+                        var why = mannequinState == true
+                            ? "mannequin icon"
+                            : mannequinState == null
+                                ? "row could not be verified as non-display — refusing to open"
+                                : $"{slotPrice:N0}g over threshold";
                         Log($"Item {_itemSlot + 1}: {why} — display item, skipping (not opened).");
                         _itemSlot++;
                         Wait(60);

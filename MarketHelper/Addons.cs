@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using ECommons.Automation;
 using ECommons.DalamudServices;
 using FFXIVClientStructs.FFXIV.Client.UI;
@@ -394,27 +396,34 @@ public static unsafe class Addons
     }
 
     /// <summary>
-    /// True if the market-board mannequin icon is visible on the given RetainerSellList row.
+    /// Whether the market-board mannequin icon is visible on the given RetainerSellList row.
     /// Row node id is 5 for the first item, then 51001, 51002, ... for subsequent rows.
     /// Path (per SND convention): RetainerSellList -> 11 (list) -> rowId -> 9 -> 11 (icon).
     /// This is the game's own display flag for "this listing is on a mannequin".
+    ///
+    /// Returns NULL when the answer cannot be determined: the row has no node (the list only
+    /// renders the rows that exist — a retainer holding more items than the list draws has rows
+    /// that simply are not there), or the structure has drifted. Callers MUST treat null as
+    /// "unknown — do not open". Returning false here was a fail-open: a mannequin row beyond the
+    /// rendered set reported "not a mannequin" and got opened, which can delist it.
     /// </summary>
-    public static bool IsSellListRowMannequin(int rowIndex)
+    public static bool? IsSellListRowMannequin(int rowIndex)
     {
         var addon = GetAddon("RetainerSellList");
-        if (addon == null) return false;
+        if (addon == null) return null;
         var list = addon->UldManager.SearchNodeById(11);
-        if (list == null) return false;
+        if (list == null) return null;
         var comp = list->GetComponent();
-        if (comp == null) return false;
+        if (comp == null) return null;
         var listComp = (AtkComponentList*)comp;
-        if (rowIndex < 0 || rowIndex >= listComp->GetItemCount()) return false;
+        if (rowIndex < 0 || rowIndex >= listComp->GetItemCount()) return null;
         var renderer = listComp->GetItemRenderer(rowIndex);
-        if (renderer == null) return false;
+        if (renderer == null) return null;
         // Node 11 (type 2) inside the row renderer is the mannequin icon — Visible on mannequin
         // items, hidden otherwise (confirmed by diffing mannequin vs non-mannequin row dumps).
         var icon = renderer->AtkComponentButton.AtkComponentBase.UldManager.SearchNodeById(11);
-        return icon != null && icon->IsVisible();
+        if (icon == null) return null;   // structure drift: we cannot verify, so we cannot open
+        return icon->IsVisible();
     }
 
     /// <summary>
@@ -462,6 +471,61 @@ public static unsafe class Addons
             sb.Append($"[id={n->NodeId} t={(int)n->Type} {vis}] ");
         }
         return sb.ToString();
+    }
+
+    private static void WalkUld(AtkUldManager* uld, List<(uint id, int type, bool vis)> into)
+    {
+        for (var i = 0; i < uld->NodeListCount; i++)
+        {
+            var n = uld->NodeList[i];
+            if (n == null) continue;
+            into.Add((n->NodeId, (int)n->Type, n->IsVisible()));
+            var comp = n->GetComponent();
+            if (comp != null) WalkUld(&comp->UldManager, into);
+        }
+    }
+
+    /// <summary>
+    /// Diagnostic: for every rendered RetainerSellList row, walk the row's full node subtree and
+    /// report each node's id/type, laid out against row 0's structure, with per-row visibility.
+    /// A mannequin row differs from the others on exactly one node id — that id is the icon.
+    /// </summary>
+    public static List<string> DumpSellListRows()
+    {
+        var lines = new List<string>();
+        var addon = GetAddon("RetainerSellList");
+        if (addon == null) { lines.Add("RetainerSellList not open"); return lines; }
+        var list = addon->UldManager.SearchNodeById(11);
+        if (list == null) { lines.Add("node 11 (list) not found"); return lines; }
+        var listComp = (AtkComponentList*)list->GetComponent();
+        if (listComp == null) { lines.Add("node 11 has no component"); return lines; }
+
+        var count = listComp->GetItemCount();
+        lines.Add($"rendered rows: {count}");
+
+        List<(uint id, int type, bool vis)>? layout = null;
+        for (var r = 0; r < count && r < 20; r++)
+        {
+            var renderer = listComp->GetItemRenderer(r);
+            if (renderer == null) { lines.Add($"  row {r}: <no renderer>"); continue; }
+
+            var nodes = new List<(uint id, int type, bool vis)>();
+            WalkUld(&renderer->AtkComponentButton.AtkComponentBase.UldManager, nodes);
+
+            if (layout == null)
+            {
+                layout = nodes;
+                lines.Add("  layout (row 0): " + string.Join(" ", nodes.Select(n => $"[{n.id}:{n.type}]")));
+            }
+
+            var parts = layout.Select(l =>
+            {
+                var m = nodes.FirstOrDefault(n => n.id == l.id);
+                return $"{l.id}:{(m.id == l.id ? (m.vis ? "V" : "-") : "?")}";
+            });
+            lines.Add($"  row {r}: {string.Join(" ", parts)}");
+        }
+        return lines;
     }
 
     public static void CloseAddon(string name)
