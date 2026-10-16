@@ -686,6 +686,13 @@ public partial class MainWindow
         ImGui.SameLine(0, SW(6));
         HelpMarker("Manual override for where the Buyer goes after a run. Leave blank to go back to the world this character lives on. Type a world name to be sent somewhere else instead.");
 
+        // Show what will actually happen, so a stale override can't silently send the player
+        // somewhere they didn't expect.
+        var effectiveHome = !string.IsNullOrWhiteSpace(homeWorld) ? homeWorld : WorldInfo.HomeWorld();
+        ImGui.TextColored(Grey, string.IsNullOrWhiteSpace(effectiveHome)
+            ? "Will return to: (unknown — log in first)"
+            : $"Will return to: {effectiveHome}");
+
         var nav = Cfg.BuyerUseNavmesh;
         if (ImGui.Checkbox("Let vnavmesh walk me to the market board", ref nav)) { Cfg.BuyerUseNavmesh = nav; Cfg.Save(); }
 

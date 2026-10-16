@@ -826,11 +826,27 @@ public sealed class BuyRunner
 
                 if (listings.Count == 0)
                 {
-                    Log(_cap == long.MaxValue
-                        ? $"{_itemName}: no more listings here ({boughtSoFar}/{_orderTotal} bought overall)."
-                        : $"{_itemName}: nothing left at or under {_cap:N0}g here ({boughtSoFar}/{_orderTotal} bought overall).");
+                    // Say WHY, or every "nothing here" costs another test run to diagnose: how many
+                    // rows the proxy actually held, and which filter removed them.
+                    var all = MarketBoard.Listings(_item);
+                    var tooDear = all.Count(l => l.UnitPrice > _cap);
+                    var hqMismatch = all.Count(l => _hqOnly && !l.Hq);
+                    var tooBig = all.Count(l => l.Quantity > remaining);
+                    var refused = all.Count(l => _badListings.Contains(ListingKey(l)));
+
+                    var why = all.Count == 0
+                        ? "the board had no rows for this item"
+                        : $"the board had {all.Count} row(s) but none qualified " +
+                          $"(too dear: {tooDear}, HQ mismatch: {hqMismatch}, " +
+                          $"bigger than the {remaining} still needed: {tooBig}, already refused: {refused})";
+
+                    var hint = tooBig > 0 && tooBig == all.Count
+                        ? " The game only sells a listing whole — turn on 'Buy oversized stacks' in Buyer settings if you want the remainder anyway."
+                        : string.Empty;
+
+                    Log($"{_itemName}: no buyable listing here ({boughtSoFar}/{_orderTotal} bought overall). {why}.{hint}");
                     Note(AuditKind.Skip, _cap == long.MaxValue
-                        ? $"no more listings — {boughtSoFar}/{_orderTotal} overall"
+                        ? $"no buyable listing — {why}"
                         : $"nothing at or under {_cap:N0}g ({_capReason}) — {boughtSoFar}/{_orderTotal} overall", _itemName);
                     State = BuyState.NextItem;
                     return;
