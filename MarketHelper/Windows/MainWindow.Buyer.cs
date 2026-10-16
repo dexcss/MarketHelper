@@ -19,17 +19,20 @@ public partial class MainWindow
         WrapText("Build a shopping list, press SCAN to find the cheapest listings in your chosen scope, then press SEND to go and buy them. Nothing is ever bought above the max price you set for that item.");
         Dummy(6f);
 
+        SectionHeader("Shopping list");
         DrawBuyerAddRow();
-        Divider();
-        DrawMakePlaceImport();
-        Divider();
+        Dummy(4f);
         DrawBuyerList();
-        Divider();
+
+        DrawMakePlaceImport();   // draws its own collapsing header
+
+        SectionHeader("Scan scope");
         DrawBuyerScope();
-        Divider();
+
+        SectionHeader("Scan and buy");
         DrawBuyerActions();
-        Divider();
-        DrawBuyerSettings();
+
+        DrawBuyerSettings();     // draws its own collapsing header
     }
 
     // ---- shopping list ------------------------------------------------------------------------

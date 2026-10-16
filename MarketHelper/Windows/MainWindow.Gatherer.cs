@@ -16,6 +16,7 @@ public partial class MainWindow
         WrapText("Pulls designated items off your retainers into your main inventory. Walks the bell, retrieves the items you list below, and stops when your bags are full. Empty your bags and run again to continue.");
         Dummy(6f);
 
+        SectionHeader("What to pull");
         var fromInv = Cfg.GatherFromInventory;
         if (ImGui.Checkbox("Pull from retainer inventory", ref fromInv)) { Cfg.GatherFromInventory = fromInv; Cfg.Save(); }
         var fromMkt = Cfg.GatherFromMarket;
@@ -23,7 +24,7 @@ public partial class MainWindow
         ImGui.SameLine(0, SW(6));
         HelpMarker("When on, designated items currently listed on the market are returned to the retainer's inventory, then retrieved into your bags. When off, only items already in the retainer's inventory are pulled.");
 
-        Dummy(4f);
+        SectionHeader("Items to gather");
         // Quick-add + search-add, both target the gather list.
         var ctrl = ImGui.GetIO().KeyCtrl;
         ImGui.TextColored(ctrl ? Green : Grey, ctrl ? "CTRL held — hover an item to add it." : "Hold CTRL and hover an item to quick-add.");
@@ -61,9 +62,7 @@ public partial class MainWindow
             }
         }
 
-        Dummy(4f);
-        ImGui.Separator();
-        ImGui.Text($"Items to gather ({Cfg.GathererItems.Count}):");
+        SectionHeader($"Items to gather ({Cfg.GathererItems.Count})");
         if (Cfg.GathererItems.Count == 0)
         {
             ImGui.TextColored(Grey, "  (empty — add items above)");
@@ -87,7 +86,7 @@ public partial class MainWindow
             if (ImGui.Button("Clear list", new Vector2(SW(120), 0))) { Cfg.GathererItems.Clear(); Cfg.Save(); }
         }
 
-        Dummy(6f);
+        SectionHeader("Run");
         var free = RetainerReader.FreePlayerBagSlots();
         ImGui.TextColored(free > 0 || free < 0 ? Grey : Red, free < 0 ? "Free inventory slots: (open to check)" : $"Free inventory slots: {free}");
 
@@ -110,9 +109,8 @@ public partial class MainWindow
             ImGui.TextColored(Grey, g.Status);
         }
 
-        Dummy(6f);
-        ImGui.Separator();
-        ImGui.TextColored(Grey, "Manual actions (operate on the window you already have open):");
+        SectionHeader("Manual actions");
+        WrapText(Grey, "Operate on the window you already have open:");
         Dummy(2f);
         var m = _plugin.Manual;
         using (ImRaiiDisabled(m.Running || Cfg.GathererItems.Count == 0))

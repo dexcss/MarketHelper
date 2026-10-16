@@ -78,8 +78,7 @@ public partial class MainWindow
             }
         }
 
-        Dummy(4f);
-        ImGui.Separator();
+        SectionHeader("Pricing");
 
         // --- Pricing options ---
         var detectedWorld = WorldInfo.CurrentWorld();
@@ -114,15 +113,13 @@ public partial class MainWindow
             DrawDcWorldSelectors();
         }
 
-        Dummy(4f);
-        ImGui.Separator();
-
+        SectionHeader("Lists");
         // --- Session list ---
         DrawItemList("Session list", _plugin.SessionListerItems, "sess", isSession: true);
         // --- Permanent list ---
         DrawItemList("Permanent list", Cfg.ListerItems, "perm", isSession: false);
 
-        Dummy(6f);
+        SectionHeader("Run");
         var lr = _plugin.Lister;
         var totalItems = _plugin.AllListerItems().Count;
         if (lr.Running)

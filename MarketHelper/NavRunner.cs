@@ -30,6 +30,7 @@ public enum NavState
     CloseRetainer,
     PostprocessBackout,
     WaitClosed,
+    CloseBell,
     Done,
     Error,
 }
@@ -245,6 +246,14 @@ public sealed class NavRunner
                 _retainerIdx++;
                 if (_retainerIdx >= _retainerCount)
                 {
+                    // All retainers processed. Dismiss the bell's retainer list so the player isn't
+                    // left staring at it — except in AutoRetainer mode, where the UI belongs to AR.
+                    if (!_postprocessMode && Addons.IsVisible("RetainerList"))
+                    {
+                        _ticks = 0;
+                        State = NavState.CloseBell;
+                        return;
+                    }
                     State = NavState.Done;
                     Status = $"Done. Processed {_retainerCount} retainer(s).";
                     Log("Finished all retainers.");
@@ -882,6 +891,28 @@ public sealed class NavRunner
                 // (retained for compatibility; CloseRetainer now transitions directly)
                 _ticks = 0;
                 State = NavState.NextRetainer;
+                break;
+
+            case NavState.CloseBell:
+                // The walk is finished: dismiss the bell's retainer list. Non-fatal — if it won't
+                // close we simply leave it up and report Done.
+                if (Now < _deadline) return;
+                if (!Addons.IsVisible("RetainerList"))
+                {
+                    State = NavState.Done;
+                    Status = $"Done. Processed {_retainerCount} retainer(s).";
+                    Log("Finished all retainers.");
+                    return;
+                }
+                if (++_ticks > 40)
+                {
+                    State = NavState.Done;
+                    Status = $"Done. Processed {_retainerCount} retainer(s).";
+                    Log("Finished all retainers. (Couldn't close the retainer list.)");
+                    return;
+                }
+                Addons.CloseAddon("RetainerList");
+                Wait(300);
                 break;
         }
     }

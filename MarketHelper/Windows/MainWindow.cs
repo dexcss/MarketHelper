@@ -210,4 +210,16 @@ public partial class MainWindow : Window
         ImGui.Separator();
         Dummy(4f);
     }
+
+    /// <summary>
+    /// A labelled section heading with breathing room above it. Use this instead of bare dividers
+    /// so tabs read top-to-bottom as named sections rather than an undifferentiated widget pile.
+    /// </summary>
+    private static void SectionHeader(string text)
+    {
+        Dummy(8f);
+        ImGui.TextColored(Gold, text);
+        ImGui.Separator();
+        Dummy(2f);
+    }
 }
