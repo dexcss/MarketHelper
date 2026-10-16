@@ -679,19 +679,28 @@ public partial class MainWindow
 
         var home = Cfg.BuyerReturnHome;
         if (ImGui.Checkbox("Return to my home world when done", ref home)) { Cfg.BuyerReturnHome = home; Cfg.Save(); }
-
-        var homeWorld = Cfg.BuyerHomeWorld;
-        ImGui.SetNextItemWidth(SW(180));
-        if (ImGui.InputTextWithHint("Home world", "blank = your home world (auto-detected)", ref homeWorld, 40)) { Cfg.BuyerHomeWorld = homeWorld; Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
-        HelpMarker("Manual override for where the Buyer goes after a run. Leave blank to go back to the world this character lives on. Type a world name to be sent somewhere else instead.");
+        HelpMarker("After the run finishes, travels back to the world this character lives on.");
 
-        // Show what will actually happen, so a stale override can't silently send the player
-        // somewhere they didn't expect.
-        var effectiveHome = !string.IsNullOrWhiteSpace(homeWorld) ? homeWorld : WorldInfo.HomeWorld();
-        ImGui.TextColored(Grey, string.IsNullOrWhiteSpace(effectiveHome)
-            ? "Will return to: (unknown — log in first)"
-            : $"Will return to: {effectiveHome}");
+        var elsewhere = Cfg.BuyerReturnElsewhere;
+        if (ImGui.Checkbox("Return to a different world instead", ref elsewhere))
+        { Cfg.BuyerReturnElsewhere = elsewhere; Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("Send the character somewhere other than home when the run finishes — for example back to a city with a summoning bell so you can keep working.");
+
+        if (home && elsewhere)
+        {
+            var target = Cfg.BuyerHomeWorld;
+            ImGui.SetNextItemWidth(SW(180));
+            if (ImGui.InputTextWithHint("Return to world", "world name", ref target, 40)) { Cfg.BuyerHomeWorld = target.Trim(); Cfg.Save(); }
+
+            // Show what will actually happen, so a typo or a stale value can't send the player
+            // somewhere they didn't expect.
+            var effectiveHome = !string.IsNullOrWhiteSpace(Cfg.BuyerHomeWorld) ? Cfg.BuyerHomeWorld : WorldInfo.HomeWorld();
+            ImGui.TextColored(Grey, string.IsNullOrWhiteSpace(effectiveHome)
+                ? "Will return to: (unknown — log in first)"
+                : $"Will return to: {effectiveHome}");
+        }
 
         var nav = Cfg.BuyerUseNavmesh;
         if (ImGui.Checkbox("Let vnavmesh walk me to the market board", ref nav)) { Cfg.BuyerUseNavmesh = nav; Cfg.Save(); }

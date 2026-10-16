@@ -246,7 +246,12 @@ public class Configuration : IPluginConfiguration
 
     // Hop back to where you started once the run finishes.
     public bool BuyerReturnHome { get; set; } = true;
-    public string BuyerHomeWorld { get; set; } = "";         // blank = world you started the run on
+    public string BuyerHomeWorld { get; set; } = "";         // override target (used only when the
+                                                             // "somewhere else" toggle is on)
+
+    // Send the character somewhere OTHER than home when the run finishes. Off by default: left on
+    // its own, the run returns to the character's home world automatically.
+    public bool BuyerReturnElsewhere { get; set; } = false;
 
     // Let vnavmesh walk the last stretch to a market board after a world hop.
     public bool BuyerUseNavmesh { get; set; } = true;

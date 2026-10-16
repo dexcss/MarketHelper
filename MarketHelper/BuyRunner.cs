@@ -129,13 +129,11 @@ public sealed class BuyRunner
             foreach (var line in stop.Lines)
                 if (!_plannedMax.TryGetValue(line.ItemId, out var cur) || line.UnitPrice > cur)
                     _plannedMax[line.ItemId] = line.UnitPrice;
-        // Where to return to when the run finishes. The manual override wins; otherwise the
-        // character's HOME world — NOT the world the run happened to start on, which is wrong
-        // whenever you were visiting another world when you pressed SEND.
-        var manual = Cfg.BuyerHomeWorld?.Trim();
-        if (!string.IsNullOrWhiteSpace(manual))
+        // Where to return to when the run finishes. The character's HOME world by default; the
+        // "somewhere else" override sends it to a typed world instead.
+        if (Cfg.BuyerReturnElsewhere && !string.IsNullOrWhiteSpace(Cfg.BuyerHomeWorld))
         {
-            _homeWorld = manual;
+            _homeWorld = Cfg.BuyerHomeWorld.Trim();
         }
         else
         {
