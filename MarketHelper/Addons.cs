@@ -274,11 +274,40 @@ public static unsafe class Addons
     /// True if the market search results window is showing the game's rate-limit message
     /// ("Please wait and try your search again."), which means the search FAILED — the empty
     /// result is NOT a genuinely empty market. Read from the ItemSearchResult addon's message node.
+    ///
+    /// Localised: Addon sheet rows 1997 and 1998 ARE that message (verified by dumping the
+    /// installed client's Addon sheet with work\sheetdump — row 1946 is "No matching items.",
+    /// 1997/1998 are the throttle). Row ids are locale-independent and the sheet's Text field is
+    /// the client's language, so matching the visible node text against those rows detects the
+    /// throttle on any client. The historical English substring match is kept as a backstop.
     /// </summary>
+    private static HashSet<string>? _throttleTexts;
+
+    private static HashSet<string> ThrottleTexts()
+    {
+        if (_throttleTexts != null) return _throttleTexts;
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Please wait and try your search again.",
+        };
+        var sheet = Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Addon>();
+        if (sheet != null)
+        {
+            foreach (var rowId in new[] { 1997u, 1998u })
+            {
+                var t = sheet.GetRowOrDefault(rowId)?.Text.ExtractText();
+                if (!string.IsNullOrWhiteSpace(t)) set.Add(t.Trim());
+            }
+        }
+        _throttleTexts = set;
+        return set;
+    }
+
     public static unsafe bool MarketSearchThrottled()
     {
         var addon = GetAddon("ItemSearchResult");
         if (addon == null) return false;
+        var texts = ThrottleTexts();
         // The "please wait" message is shown in a text node when the list is empty due to throttle.
         // Scan visible text nodes for the known phrase (locale-tolerant: match a stable substring).
         for (uint id = 1; id <= 60; id++)
@@ -289,7 +318,8 @@ public static unsafe class Addons
             if (!tn->AtkResNode.IsVisible()) continue;
             var text = tn->NodeText.ToString();
             if (string.IsNullOrEmpty(text)) continue;
-            // Match on stable fragments that appear across languages' phrasing of the throttle msg.
+            if (texts.Contains(text.Trim())) return true;
+            // Backstop for an unexpected phrasing on some locale: the English fragment.
             if (text.Contains("try your search again", StringComparison.OrdinalIgnoreCase)
                 || text.Contains("Please wait and try", StringComparison.OrdinalIgnoreCase))
                 return true;

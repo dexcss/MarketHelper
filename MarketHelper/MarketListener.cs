@@ -25,6 +25,7 @@ public sealed class MarketListener : IDisposable
     private int _searchStartTicks;
     private string _pendingItem = string.Empty;
     private bool _pendingHq;
+    private bool _nearMissLogged;   // one overlap warning per search
 
     public bool Busy => _awaitingListings;
     public string Status { get; private set; } = "Idle.";
@@ -87,6 +88,7 @@ public sealed class MarketListener : IDisposable
         Addons.FireComparePrices();
         _awaitingListings = true;
         _searchStartTicks = 0;
+        _nearMissLogged = false;
         _deadline = Now + 300; // small grace before first poll
         Status = $"Searching market for {_pendingItem}...";
     }
@@ -106,10 +108,19 @@ public sealed class MarketListener : IDisposable
         }
 
         // Ready only when the listing data is for the item we opened (guards against reading a
-        // previous item's still-present listings), and is actually populated.
+        // previous item's still-present listings). EXACT normalized equality: a Contains here
+        // priced "Curved Everkeep Sofa" with "Everkeep Sofa"'s listings whenever the proxy held
+        // the wrong item — see NavRunner.NameMatches for the same fix.
         var searchName = MarketData.SearchItemName();
-        var matches = !string.IsNullOrEmpty(searchName)
-                      && PricingLogic.Normalize(_pendingItem).Contains(PricingLogic.Normalize(searchName));
+        var pendingNorm = PricingLogic.Normalize(_pendingItem);
+        var searchNorm = PricingLogic.Normalize(searchName);
+        var matches = pendingNorm.Length > 0 && string.Equals(pendingNorm, searchNorm, StringComparison.Ordinal);
+        if (!matches && !_nearMissLogged && pendingNorm.Length > 0 && searchNorm.Length > 0
+            && (pendingNorm.Contains(searchNorm) || searchNorm.Contains(pendingNorm)))
+        {
+            _nearMissLogged = true;
+            Log($"[name-guard] '{_pendingItem}' and '{searchName}' overlap but are not the same item — waiting, not pricing.");
+        }
         if (matches && MarketData.ListingsReady())
         {
             PriceNow();

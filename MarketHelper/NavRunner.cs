@@ -66,6 +66,7 @@ public sealed class NavRunner
     private volatile bool _uniPending;                    // Universalis fetch in flight (DC/region scope)
     private List<Listing>? _uniListings;                  // converted Universalis listings for Compute
     private volatile int _uniGeneration;                  // bumped to invalidate in-flight fetches
+    private bool _nearMissLogged;   // one "[name-guard]" warning per item, so polls can't spam
     private bool _throttleBackoff;  // set when a search likely hit the game's rate limit
     private int _throttleStreak;    // consecutive throttles, to escalate the backoff
     private int _throttleRetries;   // retries of the CURRENT item due to rate-limit (reset per item)
@@ -358,6 +359,7 @@ public sealed class NavRunner
                 }
                 if (!Addons.IsReady("RetainerSellList")) { Wait(100); return; }
                 _throttleRetries = 0;   // fresh item — reset its rate-limit retry counter
+                _nearMissLogged = false;   // fresh item — one near-match warning per item
 
                 // Skip mannequin / display items WITHOUT opening them. Primary signal is the game's
                 // own mannequin icon on the sell-list row (deterministic). Fallback is the price
@@ -962,16 +964,30 @@ public sealed class NavRunner
         PricingLogic.Normalize(name) + (hq ? "#hq" : "#nq");
 
     /// <summary>
-    /// True if the clean search name corresponds to the opened item. The node name is often
-    /// wrapped in glyph payload junk, so we normalize both (letters/digits only) and check the
-    /// clean sheet name is contained in the node name.
+    /// True if the clean search name corresponds to the opened item. Both names are normalized
+    /// (letters/digits only, lowercased — this also strips the glyph payload junk the node name
+    /// carries) and compared for EXACT equality.
+    ///
+    /// This used to accept a bidirectional Contains, which priced one item with a DIFFERENT
+    /// item's listings whenever one name is a substring of the other ("Everkeep Sofa" vs
+    /// "Curved Everkeep Sofa" — exactly what this guard exists to prevent). Exact equality is
+    /// strict by design: a false negative leaves the item's price untouched (visible in the log),
+    /// while the old false positive silently undercut against the wrong market. Near-misses are
+    /// logged once so a too-strict regression would be visible in game instead of silent.
     /// </summary>
-    private static bool NameMatches(string searchName, string openedName)
+    private bool NameMatches(string searchName, string openedName)
     {
         var a = PricingLogic.Normalize(searchName);
         var b = PricingLogic.Normalize(openedName);
         if (a.Length == 0 || b.Length == 0) return false;
-        return b.Contains(a) || a.Contains(b);
+        if (string.Equals(a, b, StringComparison.Ordinal)) return true;
+
+        if (!_nearMissLogged && (b.Contains(a) || a.Contains(b)))
+        {
+            _nearMissLogged = true;
+            Log($"[name-guard] '{searchName}' and '{openedName}' overlap but are not the same item — leaving the price untouched. If this skips a real item, tell dexcss.");
+        }
+        return false;
     }
 
     /// <summary>Apply a remembered price to the currently open item, no market search.</summary>

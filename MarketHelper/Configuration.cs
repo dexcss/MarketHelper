@@ -69,19 +69,13 @@ public class Configuration : IPluginConfiguration
     public int MinPriceFloor { get; set; } = 100_000_000;      // fallback price; set very high so an
                                                                // accidental fallback lists out of reach
                                                                // (nobody buys it) rather than dirt cheap
-    public bool SkipItemsAlreadyLowest { get; set; } = true;   // don't re-set if already cheapest & ours
-
-    // --- Reactive mode ---
+    public bool SkipItemsAlreadyLowest { get; set; } = true;   // don't re-set if already cheapest & ours    // --- Reactive mode ---
     // Off by default: when on, prices any item whose sell window opens even outside a Run.
     // Most users want undercutting only during an explicit Run, so leave this off.
     public bool MarketHelperOnOpen { get; set; } = false;      // undercut each item as its RetainerSell window opens
     public bool AutoConfirm { get; set; } = true;              // auto-confirm after setting price (fully hands-off)
 
     // --- Speed ---
-    // Multiplies all inter-step waits. 1.0 = default (fast). Raise toward 2.0 if steps
-    // occasionally miss on high latency; lower toward 0.5 to go faster on a fast connection.
-    public float SpeedMultiplier { get; set; } = 1.0f;
-
     // Minimum delay (ms) before each market search, to avoid the game's "Please wait and try your
     // search again" rate limit. Higher = safer on high-latency connections. Default 600ms.
     public int SearchPacingMs { get; set; } = 600;
@@ -130,7 +124,6 @@ public class Configuration : IPluginConfiguration
     public List<uint> GathererItems { get; set; } = new();
     public bool GatherFromInventory { get; set; } = true;   // pull from retainer inventory
     public bool GatherFromMarket { get; set; } = true;      // pull back from active market listings
-    public bool ListerPriceByDc { get; set; } = false;     // legacy; superseded by ListerPriceScope
     public int ListerPriceScope { get; set; } = 0;         // 0 = home world, 1 = data center, 2 = region
 
     // Units per listing, PER ITEM, keyed by item id. Absent or 0 means the whole stack in one
@@ -151,10 +144,6 @@ public class Configuration : IPluginConfiguration
     public int ListerUndercutBy { get; set; } = 1;         // gil below the lowest
     public string ListerWorldOverride { get; set; } = "";  // manual world if auto-detect fails
     public string ListerDcOverride { get; set; } = "";     // manual DC if auto-detect fails
-
-    // Outlier protection: if the cheapest listing is more than this % below the NEXT listing,
-    // treat it as a lone undercut/troll and price against the next one instead. 0 = disabled.
-    public float ListerOutlierGapPercent { get; set; } = 15.0f;
 
     // --- Buyer settings ---
     // Shopping list: what to buy, how many, and (optionally) a hard per-unit price ceiling.

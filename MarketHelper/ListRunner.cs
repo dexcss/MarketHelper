@@ -77,6 +77,14 @@ public sealed class ListRunner
     private long _realPriceResult;
     private string? _realPriceNote;
 
+    // Bumped every time the runner advances to a new item. An async price fetch captures the
+    // generation it was fired for and ignores its own completion if the runner has moved on —
+    // without this, a timed-out (>10s) fetch for item A could land AFTER item B's wait began and
+    // hand item B either A's price (real mode: a confirmed listing at the wrong price) or a
+    // spurious "data arrived" that truncated B's own wait. Same generation-guard pattern
+    // NavRunner got in 1.17.9.0.
+    private int _priceGen;
+
     // AutoRetainer postprocess mode: AR already has the retainer open; list preset items on THIS
     // retainer only, then back out to SelectString and signal AR via the callback.
     private bool _postprocessMode;
@@ -388,6 +396,8 @@ public sealed class ListRunner
                     _dryPriceLoc = _currentLoc!.Value;
                     _dryPriceResult = 0;
                     _dryPricePending = true;
+                    _priceGen++;
+                    var gen = _priceGen;
                     var scope = PriceScope();
                     if (string.IsNullOrEmpty(scope))
                     {
@@ -395,7 +405,7 @@ public sealed class ListRunner
                         FinishDryItem();
                         return;
                     }
-                    _ = PreviewPriceAsync(scope, _currentItem);
+                    _ = PreviewPriceAsync(scope, _currentItem, gen);
                     State = ListState.WaitDryPrice;
                     _ticks = 0;
                     Wait(100);
@@ -508,7 +518,8 @@ public sealed class ListRunner
                     }
                     else
                     {
-                        _ = RealPriceAsync(scope, _currentItem);
+                        var gen = _priceGen;
+                        _ = RealPriceAsync(scope, _currentItem, gen);
                         _ticks = 0;
                         Wait(100);
                         State = ListState.WaitRealPrice;
@@ -651,12 +662,19 @@ public sealed class ListRunner
         _deadline = Now + (int)(ms * scale);
     }
 
-    /// <summary>Resolve the Universalis location string for the configured pricing scope.</summary>
+    /// <summary>
+    /// Resolve the Universalis location string for the configured pricing scope.
+    ///
+    /// The Lister tab's manual Data Center / World selectors (shown when auto-detection fails)
+    /// write ListerDcOverride / ListerWorldOverride — which nothing read before 1.17.24.0, so a
+    /// manually picked world was silently ignored and pricing fell back to a location we couldn't
+    /// resolve at all. An override now wins for its scope; empty means auto-detect as before.
+    /// </summary>
     private string PriceScope() => Cfg.ListerPriceScope switch
     {
         2 => WorldInfo.CurrentRegion(),
-        1 => WorldInfo.CurrentDataCenter(),
-        _ => WorldInfo.CurrentWorld(),
+        1 => string.IsNullOrWhiteSpace(Cfg.ListerDcOverride) ? WorldInfo.CurrentDataCenter() : Cfg.ListerDcOverride.Trim(),
+        _ => string.IsNullOrWhiteSpace(Cfg.ListerWorldOverride) ? WorldInfo.CurrentWorld() : Cfg.ListerWorldOverride.Trim(),
     };
 
     private string ScopeLabel() => Cfg.ListerPriceScope switch { 2 => "region", 1 => "DC", _ => "world" };
@@ -720,22 +738,29 @@ public sealed class ListRunner
     }
 
     /// <summary>Real-mode price fetch at DC/region scope via Universalis (mirrors the dry preview).</summary>
-    private async System.Threading.Tasks.Task RealPriceAsync(string scope, uint itemId)
+    private async System.Threading.Tasks.Task RealPriceAsync(string scope, uint itemId, int gen)
     {
+        long result = 0;
+        string? note = null;
         try
         {
             var res = await Universalis.GetListingsAsync(scope, itemId, 10, false);
             if (res.HasData)
             {
                 var prices = res.Listings.Select(l => (long)l.PricePerUnit).OrderBy(p => p).ToList();
-                var (basePrice, note) = ChooseBasePrice(prices);
-                _realPriceNote = note;
-                _realPriceResult = basePrice;
+                var (basePrice, n) = ChooseBasePrice(prices);
+                note = n;
+                result = basePrice;
             }
-            else _realPriceResult = 0;
         }
-        catch { _realPriceResult = 0; }
-        finally { _realPricePending = false; }
+        catch { result = 0; }
+
+        // The runner may have advanced (timeout skip) while this was in flight — a late result
+        // for the PREVIOUS item must never be confirmed as the CURRENT item's price.
+        if (gen != _priceGen) return;
+        _realPriceNote = note;
+        _realPriceResult = result;
+        _realPricePending = false;
     }
 
     /// <summary>
@@ -743,8 +768,10 @@ public sealed class ListRunner
     /// (world or DC) and compute the price we'd list at (lowest − undercut). Runs off-thread;
     /// sets _dryPriceResult and clears _dryPricePending when done.
     /// </summary>
-    private async System.Threading.Tasks.Task PreviewPriceAsync(string scope, uint itemId)
+    private async System.Threading.Tasks.Task PreviewPriceAsync(string scope, uint itemId, int gen)
     {
+        long result = 0;
+        string? sanity = null;
         try
         {
             var res = await Universalis.GetListingsAsync(scope, itemId, 10, false);
@@ -752,22 +779,20 @@ public sealed class ListRunner
             {
                 var prices = res.Listings.Select(l => (long)l.PricePerUnit).OrderBy(p => p).ToList();
                 var (basePrice, note) = ChooseBasePrice(prices);
-                _dryPriceSanity = note;
-                _dryPriceResult = System.Math.Max(1, basePrice - Cfg.ListerUndercutBy);
-            }
-            else
-            {
-                _dryPriceResult = 0;
+                sanity = note;
+                result = System.Math.Max(1, basePrice - Cfg.ListerUndercutBy);
             }
         }
         catch
         {
-            _dryPriceResult = 0;
+            result = 0;
         }
-        finally
-        {
-            _dryPricePending = false;
-        }
+
+        // Same generation guard as RealPriceAsync: never publish a previous item's price.
+        if (gen != _priceGen) return;
+        _dryPriceSanity = sanity;
+        _dryPriceResult = result;
+        _dryPricePending = false;
     }
 
     /// <summary>Log the dry-run preview line for the current item and advance.</summary>

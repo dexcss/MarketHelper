@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using Dalamud.Interface;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
@@ -41,27 +42,27 @@ public partial class MainWindow : Window
     {
         if (ImGui.BeginTabBar("##markethelper_tabs"))
         {
-            if (ImGui.BeginTabItem("Undercut"))
+            if (BeginIconTab(FontAwesomeIcon.Tags, "Undercut"))
             {
                 DrawUndercutTab();
                 ImGui.EndTabItem();
             }
-            if (ImGui.BeginTabItem("Flipper"))
+            if (BeginIconTab(FontAwesomeIcon.MoneyBillTrendUp, "Flipper"))
             {
                 DrawFlipperTab();
                 ImGui.EndTabItem();
             }
-            if (ImGui.BeginTabItem("Lister"))
+            if (BeginIconTab(FontAwesomeIcon.ListUl, "Lister"))
             {
                 DrawListerTab();
                 ImGui.EndTabItem();
             }
-            if (ImGui.BeginTabItem("Item Gatherer"))
+            if (BeginIconTab(FontAwesomeIcon.BoxOpen, "Item Gatherer"))
             {
                 DrawGathererTab();
                 ImGui.EndTabItem();
             }
-            if (ImGui.BeginTabItem("Buyer"))
+            if (BeginIconTab(FontAwesomeIcon.CartArrowDown, "Buyer"))
             {
                 DrawBuyerTab();
                 ImGui.EndTabItem();
@@ -71,6 +72,11 @@ public partial class MainWindow : Window
 
         _fileDialog.Draw();
     }
+
+    /// <summary>BeginTabItem with a FontAwesome glyph prefix. The helper is verified against the
+    /// dev-hooks Dalamud.dll (Dalamud.Interface.FontAwesomeExtensions.ToIconString).</summary>
+    private static bool BeginIconTab(FontAwesomeIcon icon, string label)
+        => ImGui.BeginTabItem($"{icon.ToIconString()} {label}");
 
     /// <summary>The Undercut tab: the run section plus its sub-tabs (Settings/Overrides/etc).</summary>
     private void DrawUndercutTab()

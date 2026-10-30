@@ -36,7 +36,8 @@ public sealed class GatherRunner
     private double _deadline;
     private int _ticks;
     private bool _closeActed;
-    private int _pulled;   // total items retrieved this run
+    private int _pulled;   // stacks retrieved into the player's bags this run
+    private int _returned; // market listings returned to the retainer's inventory this run
     private int _bagsFullStreak;   // consecutive confirmed-full reads (debounce)
     private (InventoryType Type, ushort Slot)? _pendingRetrieveLoc;   // slot we're about to retrieve
     private uint _pendingRetrieveItem;
@@ -58,7 +59,7 @@ public sealed class GatherRunner
         if (RetainerReader.PlayerBagsFull()) { SetError("Your inventory is already full — empty it first."); return; }
 
         _wanted = new HashSet<uint>(Cfg.GathererItems);
-        _pulled = 0; _bagsFullStreak = 0;
+        _pulled = 0; _returned = 0; _bagsFullStreak = 0;
         _pendingRetrieveLoc = null; _pendingRetrieveItem = 0;
         _lastRetrievedLoc = null; _lastRetrievedItem = 0;
         _retainerIdx = -1;
@@ -93,7 +94,7 @@ public sealed class GatherRunner
                 _bagsFullStreak++;
                 if (_bagsFullStreak >= 3)
                 {
-                    Log($"Inventory full — stopping. Pulled {_pulled} item(s). Empty your bags and run again.");
+                    Log($"Inventory full — stopping. Retrieved {_pulled} stack(s) ({_returned} listing(s) returned from the market first). Empty your bags and run again.");
                     _ticks = 0; _closeActed = false; _bagsFullStreak = 0;
                     State = GatherState.CloseRetainer;
                     _finishAfterClose = true;
@@ -142,8 +143,8 @@ public sealed class GatherRunner
                 {
                     _ticks = 0; _finishAfterClose = true;
                     State = GatherState.WaitClosed;
-                    Status = $"Done. Pulled {_pulled} item(s).";
-                    Log($"Finished all retainers. Pulled {_pulled} item(s).");
+                    Status = $"Done. Retrieved {_pulled} stack(s).";
+                    Log($"Finished all retainers. Retrieved {_pulled} stack(s) into your bags ({_returned} market listing(s) returned to the retainer first).");
                     return;
                 }
                 if (!Addons.IsVisible("RetainerList"))
@@ -230,8 +231,8 @@ public sealed class GatherRunner
                 {
                     if (RetainerRetrieve.SelectReturnToInventory())
                     {
-                        _pulled++;
-                        Log($"Returned a listing to inventory.");
+                        _returned++;
+                        Log($"Returned a listing to the retainer's inventory.");
                         Wait(600);
                         State = GatherState.MarketReturn;   // look for the next one
                         return;

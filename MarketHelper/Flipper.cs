@@ -47,10 +47,16 @@ public sealed class Flipper
         Error = null;
         Results = new Dictionary<string, Universalis.LocationResult>();
         Loading = true;
-        _ = RunAsync();
+        _searchGen++;
+        var gen = _searchGen;
+        _ = RunAsync(gen);
     }
 
-    private async Task RunAsync()
+    // Bumped per search. A slow search for item A that finishes after you searched item B must
+    // not publish A's results under B's name (or clear B's Loading flag early).
+    private int _searchGen;
+
+    private async Task RunAsync(int gen)
     {
         try
         {
@@ -58,6 +64,7 @@ public sealed class Flipper
                 r => r,
                 r => Universalis.GetListingsAsync(r, ItemId, 10, HqOnly));
             await Task.WhenAll(tasks.Values);
+            if (gen != _searchGen) return;   // a newer search owns the published state now
             // Build off-thread, publish in one assignment — see the Results property.
             var fresh = new Dictionary<string, Universalis.LocationResult>();
             foreach (var (region, task) in tasks)
@@ -66,11 +73,11 @@ public sealed class Flipper
         }
         catch (Exception ex)
         {
-            Error = ex.Message;
+            if (gen == _searchGen) Error = ex.Message;
         }
         finally
         {
-            Loading = false;
+            if (gen == _searchGen) Loading = false;
         }
     }
 

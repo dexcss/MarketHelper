@@ -20,37 +20,67 @@ public static class ItemSearch
     }
 
     private static List<Hit>? _marketable;
+    private static List<string>? _marketableLower;   // parallel to _marketable: pre-lowered names
 
     private static List<Hit> Marketable()
     {
         if (_marketable != null) return _marketable;
-        _marketable = new List<Hit>();
+        var hits = new List<Hit>();
+        var lower = new List<string>();
         var sheet = Svc.Data.GetExcelSheet<Item>();
-        if (sheet == null) return _marketable;
-        foreach (var row in sheet)
+        if (sheet != null)
         {
-            // ItemSearchCategory.RowId != 0 => sellable on the market board.
-            if (row.ItemSearchCategory.RowId == 0) continue;
-            var name = row.Name.ExtractText();
-            if (string.IsNullOrWhiteSpace(name)) continue;
-            _marketable.Add(new Hit(row.RowId, name));
+            foreach (var row in sheet)
+            {
+                // ItemSearchCategory.RowId != 0 => sellable on the market board.
+                if (row.ItemSearchCategory.RowId == 0) continue;
+                var name = row.Name.ExtractText();
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                hits.Add(new Hit(row.RowId, name));
+                lower.Add(name.ToLowerInvariant());
+            }
         }
+        _marketable = hits;
+        _marketableLower = lower;
         return _marketable;
     }
 
-    /// <summary>Case-insensitive substring search, capped. Exact/prefix matches first.</summary>
+    /// <summary>
+    /// Case-insensitive substring search, capped. Exact/prefix matches first.
+    ///
+    /// The result for the last query is cached: the UI calls this every frame while the query
+    /// box holds text, and re-lowering ~15k item names per frame was thousands of throwaway
+    /// string allocations a second for an unchanged query.
+    /// </summary>
     public static List<Hit> Find(string query, int max = 15)
     {
         var q = query.Trim();
         if (q.Length < 2) return new List<Hit>();
+        if (_lastFindQuery == q && _lastFindMax == max && _lastFindResults != null) return _lastFindResults;
+
         var ql = q.ToLowerInvariant();
-        return Marketable()
-            .Where(h => h.Name.ToLowerInvariant().Contains(ql))
-            .OrderBy(h => h.Name.ToLowerInvariant().StartsWith(ql) ? 0 : 1)
-            .ThenBy(h => h.Name.Length)
-            .Take(max)
-            .ToList();
+        Marketable();
+        var hits = new List<Hit>();
+        for (var i = 0; i < _marketable!.Count; i++)
+        {
+            var nameLower = _marketableLower![i];
+            if (!nameLower.Contains(ql)) continue;
+            hits.Add(_marketable[i]);
+        }
+        hits.Sort((a, b) =>
+        {
+            var aPrefix = a.Name.ToLowerInvariant().StartsWith(ql, StringComparison.Ordinal) ? 0 : 1;
+            var bPrefix = b.Name.ToLowerInvariant().StartsWith(ql, StringComparison.Ordinal) ? 0 : 1;
+            if (aPrefix != bPrefix) return aPrefix - bPrefix;
+            return a.Name.Length - b.Name.Length;
+        });
+        _lastFindQuery = q; _lastFindMax = max; _lastFindResults = hits.Take(max).ToList();
+        return _lastFindResults;
     }
+
+    private static string? _lastFindQuery;
+    private static int _lastFindMax = -1;
+    private static List<Hit>? _lastFindResults;
 
     private static Dictionary<uint, string>? _byId;
 
@@ -116,37 +146,64 @@ public static class ItemSearch
 
     private static List<Hit>? _allItems;
     private static Dictionary<uint, string>? _allById;
+    private static List<string>? _allLower;   // parallel to _allItems: pre-lowered names
 
     private static List<Hit> AllItems()
     {
         if (_allItems != null) return _allItems;
-        _allItems = new List<Hit>();
-        _allById = new Dictionary<uint, string>();
+        var hits = new List<Hit>();
+        var lower = new List<string>();
+        var byId = new Dictionary<uint, string>();
         var sheet = Svc.Data.GetExcelSheet<Item>();
-        if (sheet == null) return _allItems;
-        foreach (var row in sheet)
+        if (sheet != null)
         {
-            var name = row.Name.ExtractText();
-            if (string.IsNullOrWhiteSpace(name)) continue;
-            _allItems.Add(new Hit(row.RowId, name));
-            _allById[row.RowId] = name;
+            foreach (var row in sheet)
+            {
+                var name = row.Name.ExtractText();
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                hits.Add(new Hit(row.RowId, name));
+                lower.Add(name.ToLowerInvariant());
+                byId[row.RowId] = name;
+            }
         }
+        _allItems = hits;
+        _allLower = lower;
+        _allById = byId;
         return _allItems;
     }
 
-    /// <summary>Case-insensitive substring search over ALL items (incl. unmarketable), capped.</summary>
+    /// <summary>
+    /// Case-insensitive substring search over ALL items (incl. unmarketable), capped.
+    /// Cached for the last query — see <see cref="Find"/> for why.
+    /// </summary>
     public static List<Hit> FindAny(string query, int max = 15)
     {
         var q = query.Trim();
         if (q.Length < 2) return new List<Hit>();
+        if (_lastFindAnyQuery == q && _lastFindAnyMax == max && _lastFindAnyResults != null) return _lastFindAnyResults;
+
         var ql = q.ToLowerInvariant();
-        return AllItems()
-            .Where(h => h.Name.ToLowerInvariant().Contains(ql))
-            .OrderBy(h => h.Name.ToLowerInvariant().StartsWith(ql) ? 0 : 1)
-            .ThenBy(h => h.Name.Length)
-            .Take(max)
-            .ToList();
+        AllItems();
+        var hits = new List<Hit>();
+        for (var i = 0; i < _allItems!.Count; i++)
+        {
+            if (!_allLower![i].Contains(ql)) continue;
+            hits.Add(_allItems[i]);
+        }
+        hits.Sort((a, b) =>
+        {
+            var aPrefix = a.Name.ToLowerInvariant().StartsWith(ql, StringComparison.Ordinal) ? 0 : 1;
+            var bPrefix = b.Name.ToLowerInvariant().StartsWith(ql, StringComparison.Ordinal) ? 0 : 1;
+            if (aPrefix != bPrefix) return aPrefix - bPrefix;
+            return a.Name.Length - b.Name.Length;
+        });
+        _lastFindAnyQuery = q; _lastFindAnyMax = max; _lastFindAnyResults = hits.Take(max).ToList();
+        return _lastFindAnyResults;
     }
+
+    private static string? _lastFindAnyQuery;
+    private static int _lastFindAnyMax = -1;
+    private static List<Hit>? _lastFindAnyResults;
 
     /// <summary>Name for ANY item id (incl. unmarketable), or empty if not found.</summary>
     public static string FindByIdAny(uint id)

@@ -72,14 +72,33 @@ public partial class MainWindow
             if (ImGui.BeginChild("##gatheritems", new Vector2(0, SW(160)), true))
             {
                 uint? remove = null;
-                foreach (var id in Cfg.GathererItems)
+
+                // Same table treatment as the Lister's lists: icon, name, remove — so both tabs
+                // read the same way.
+                var tflags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingFixedFit;
+                if (ImGui.BeginTable("##gathertable", 3, tflags))
                 {
-                    var name = ItemSearch.FindByIdAny(id);
-                    if (string.IsNullOrEmpty(name)) name = $"Item #{id}";
-                    if (ImGui.SmallButton($"x##grm{id}")) remove = id;
-                    ImGui.SameLine();
-                    ImGui.Text(name);
+                    ImGui.TableSetupColumn("##gicon", ImGuiTableColumnFlags.WidthFixed, SW(26));
+                    ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 1f);
+                    ImGui.TableSetupColumn("##gdel", ImGuiTableColumnFlags.WidthFixed, SW(24));
+                    ImGui.TableHeadersRow();
+
+                    foreach (var id in Cfg.GathererItems)
+                    {
+                        var name = ItemSearch.FindByIdAny(id);
+                        if (string.IsNullOrEmpty(name)) name = $"Item #{id}";
+
+                        ImGui.TableNextRow();
+                        ImGui.TableNextColumn();
+                        MainWindow.DrawItemIconStatic(id, SW(22));
+                        ImGui.TableNextColumn();
+                        ImGui.TextUnformatted(name);
+                        ImGui.TableNextColumn();
+                        if (ImGui.SmallButton($"x##grm{id}")) remove = id;
+                    }
+                    ImGui.EndTable();
                 }
+
                 if (remove.HasValue) { Cfg.GathererItems.Remove(remove.Value); Cfg.Save(); }
             }
             ImGui.EndChild();

@@ -44,32 +44,81 @@ public static class WorldInfo
         return dc.ValueNullable?.Name.ExtractText() ?? string.Empty;
     }
 
+    // ---- Cached world/DC/region lookups -------------------------------------------------
+    //
+    // The World sheet never changes while the game runs, but every one of the lookups below
+    // used to re-derive itself from it on EVERY call — and the UI calls them per frame (the
+    // Buyer's scope section alone stacked several full-sheet passes per frame, each allocating
+    // ExtractText strings for ~1,000 worlds). Build the maps once, lazily, and serve every
+    // lookup from them. Wrapped in a lock because first use can come from the draw thread or
+    // the framework tick.
+    private static readonly object CacheLock = new();
+    private static List<string>? _cachedDcs;
+    private static Dictionary<string, List<string>>? _worldsByDc;
+    private static Dictionary<string, uint>? _regionByDc;
+    private static Dictionary<string, string>? _dcByWorld;
+
+    private static void BuildCaches()
+    {
+        if (_worldsByDc != null) return;
+        lock (CacheLock)
+        {
+            if (_worldsByDc != null) return;
+
+            var worldsByDc = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var regionByDc = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+            var dcByWorld = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            var sheet = Svc.Data.GetExcelSheet<World>();
+            if (sheet != null)
+            {
+                foreach (var w in sheet)
+                {
+                    if (!w.IsPublic || w.DataCenter.RowId == 0) continue;
+                    var dcName = w.DataCenter.ValueNullable?.Name.ExtractText() ?? string.Empty;
+                    var worldName = w.Name.ExtractText();
+                    if (string.IsNullOrWhiteSpace(dcName)) continue;
+                    if (!worldsByDc.TryGetValue(dcName, out var list))
+                        worldsByDc[dcName] = list = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(worldName))
+                    {
+                        list.Add(worldName);
+                        dcByWorld[worldName] = dcName;
+                    }
+                    regionByDc[dcName] = w.DataCenter.ValueNullable?.Region.RowId ?? 0;
+                }
+                foreach (var list in worldsByDc.Values)
+                    list.Sort(StringComparer.OrdinalIgnoreCase);
+            }
+
+            _worldsByDc = worldsByDc;
+            _regionByDc = regionByDc;
+            _dcByWorld = dcByWorld;
+            _cachedDcs = worldsByDc.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+    }
+
     /// <summary>All data-center names that have at least one public world.</summary>
     public static List<string> AllDataCenters()
     {
-        var worlds = Svc.Data.GetExcelSheet<World>();
-        if (worlds == null) return new List<string>();
-        return worlds
-            .Where(w => w.IsPublic && w.DataCenter.RowId != 0)
-            .Select(w => w.DataCenter.ValueNullable?.Name.ExtractText() ?? string.Empty)
-            .Where(n => !string.IsNullOrWhiteSpace(n))
-            .Distinct()
-            .OrderBy(n => n)
-            .ToList();
+        BuildCaches();
+        return new List<string>(_cachedDcs!);
     }
 
-    /// <summary>Public world names on the given data center.</summary>
+    /// <summary>Public world names on the given data center (sorted). Empty when unknown.</summary>
     public static List<string> WorldsOnDataCenter(string dcName)
     {
-        var worlds = Svc.Data.GetExcelSheet<World>();
-        if (worlds == null) return new List<string>();
-        return worlds
-            .Where(w => w.IsPublic
-                        && w.DataCenter.ValueNullable?.Name.ExtractText() == dcName
-                        && !string.IsNullOrWhiteSpace(w.Name.ExtractText()))
-            .Select(w => w.Name.ExtractText())
-            .OrderBy(n => n)
-            .ToList();
+        BuildCaches();
+        return _worldsByDc!.TryGetValue(dcName, out var list)
+            ? new List<string>(list)
+            : new List<string>();
+    }
+
+    /// <summary>Data center name for a named world, or empty.</summary>
+    public static string DataCenterOfWorld(string worldName)
+    {
+        BuildCaches();
+        return _dcByWorld!.TryGetValue(worldName, out var dc) ? dc : string.Empty;
     }
 
     // Universalis region names, keyed by the data center's WorldRegionGroup row id — the sheet
@@ -129,16 +178,8 @@ public static class WorldInfo
     /// <summary>Region id for a named data center, or 0 if unknown.</summary>
     public static uint RegionIdOfDataCenter(string dcName)
     {
-        var worlds = Svc.Data.GetExcelSheet<World>();
-        if (worlds == null) return 0;
-        foreach (var w in worlds)
-        {
-            if (!w.IsPublic || w.DataCenter.RowId == 0) continue;
-            var dc = w.DataCenter.ValueNullable;
-            if (dc == null) continue;
-            if (dc.Value.Name.ExtractText() == dcName) return dc.Value.Region.RowId;
-        }
-        return 0;
+        BuildCaches();
+        return _regionByDc!.TryGetValue(dcName, out var region) ? region : 0;
     }
 
     /// <summary>
@@ -147,15 +188,9 @@ public static class WorldInfo
     /// </summary>
     public static List<string> DataCentersInRegion(uint regionId)
     {
-        var worlds = Svc.Data.GetExcelSheet<World>();
-        if (worlds == null) return new List<string>();
-        return worlds
-            .Where(w => w.IsPublic && w.DataCenter.RowId != 0
-                        && (w.DataCenter.ValueNullable?.Region.RowId ?? 0) == regionId)
-            .Select(w => w.DataCenter.ValueNullable?.Name.ExtractText() ?? string.Empty)
-            .Where(n => !string.IsNullOrWhiteSpace(n))
-            .Distinct()
-            .OrderBy(n => n)
+        BuildCaches();
+        return _cachedDcs!
+            .Where(dc => _regionByDc!.TryGetValue(dc, out var r) && r == regionId)
             .ToList();
     }
 
@@ -297,34 +332,10 @@ public static class WorldInfo
         return lines;
     }
 
-    /// <summary>Data center name for a named world, or empty.</summary>
-    public static string DataCenterOfWorld(string worldName)
-    {
-        var worlds = Svc.Data.GetExcelSheet<World>();
-        if (worlds == null) return string.Empty;
-        foreach (var w in worlds)
-        {
-            if (!w.IsPublic) continue;
-            if (w.Name.ExtractText() != worldName) continue;
-            return w.DataCenter.ValueNullable?.Name.ExtractText() ?? string.Empty;
-        }
-        return string.Empty;
-    }
-
-    /// <summary>Every public world name mapped to its data center. One sheet pass.</summary>
+    /// <summary>Every public world name mapped to its data center. Served from the cache.</summary>
     public static Dictionary<string, string> WorldToDataCenter()
     {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var worlds = Svc.Data.GetExcelSheet<World>();
-        if (worlds == null) return map;
-        foreach (var w in worlds)
-        {
-            if (!w.IsPublic || w.DataCenter.RowId == 0) continue;
-            var name = w.Name.ExtractText();
-            var dc = w.DataCenter.ValueNullable?.Name.ExtractText() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(dc)) continue;
-            map[name] = dc;
-        }
-        return map;
+        BuildCaches();
+        return new Dictionary<string, string>(_dcByWorld!, StringComparer.OrdinalIgnoreCase);
     }
 }
