@@ -104,9 +104,11 @@ public abstract class ShellWindow : Window
         if (UiKit.IconButton("##fancy-close", FontAwesomeIcon.Times, "Close", false, close))
             this.IsOpen = false;
 
-        // Body (kept clear of the resize grip).
+        // Body. The old -8f*s right inset stacked with the scrollbar gutter and made content
+        // lean left of centre (live screenshot 2026-10-30); the resize grip only occupies the
+        // bottom-right corner, which the bottom inset already clears.
         ImGui.SetCursorScreenPos(new Vector2(pos.X + Theme.Pad, headerTop + headerH + Theme.Pad));
-        var bodySize = new Vector2(size.X - Theme.Pad * 2f - 8f * s,
+        var bodySize = new Vector2(size.X - Theme.Pad * 2f,
             size.Y - topInset - headerH - Theme.Pad * 2f - 8f * s);
         if (ImGui.BeginChild("##fancy-body", bodySize, false, ImGuiWindowFlags.None))
             this.DrawBody();

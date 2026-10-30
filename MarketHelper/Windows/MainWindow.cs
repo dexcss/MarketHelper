@@ -32,6 +32,8 @@ public partial class MainWindow : ShellWindow
 
     // Blocky geometry for the stock widgets that remain (text fields, sliders, combos, tables):
     // square-ish corners and roomier padding, on top of the colour theme the shell already pushes.
+    // FrameBg is lifted one step above Surface so slider tracks and input fields are visible
+    // (live screenshot 2026-10-30: the troll-floor grab floated on an invisible track).
     public override void PreDraw()
     {
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, Theme.RadiusControl);
@@ -43,13 +45,15 @@ public partial class MainWindow : ShellWindow
         ImGui.PushStyleVar(ImGuiStyleVar.ItemInnerSpacing, new Vector2(Theme.Gap * 0.6f, Theme.Gap * 0.4f));
         ImGui.PushStyleColor(ImGuiCol.ChildBg, Theme.Surface);
         base.PreDraw();
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(0.196f, 0.161f, 0.310f, 1f));
     }
 
     public override void PostDraw()
     {
         ImGui.PopStyleColor(1);
-        ImGui.PopStyleVar(7);
         base.PostDraw();
+        ImGui.PopStyleColor(1);
+        ImGui.PopStyleVar(7);
     }
 
     /// <summary>Version chip + one status dot per runner, drawn into the free title-bar span.</summary>

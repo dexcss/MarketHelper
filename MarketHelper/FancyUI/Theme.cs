@@ -16,15 +16,18 @@ namespace MarketHelper.FancyUI;
 public static class Theme
 {
     // ---- palette: purple default ----------------------------------------
+    // Text/Muted/Border are lifted brighter than the kit's original tokens after a live
+    // screenshot round (2026-10-30): the originals blended together on the near-black
+    // window. Contrast first — the look stays purple and blocky.
     public static readonly Vector4 WindowBg   = new(0.027f, 0.024f, 0.043f, 0.96f); // #07060B
     public static readonly Vector4 Surface    = new(0.110f, 0.090f, 0.188f, 1.00f); // #1C1730
     public static readonly Vector4 SurfaceAlt = new(0.153f, 0.125f, 0.251f, 1.00f); // #272040
-    public static readonly Vector4 Border     = new(0.294f, 0.227f, 0.478f, 0.60f); // #4B3A7A
+    public static readonly Vector4 Border     = new(0.365f, 0.290f, 0.560f, 0.75f); // lifted #4B3A7A
 
     public static readonly Vector4 Accent     = new(0.608f, 0.420f, 1.000f, 1.00f); // #9B6BFF violet
     public static readonly Vector4 AccentSoft = new(0.608f, 0.420f, 1.000f, 0.30f);
-    public static readonly Vector4 Text       = new(0.914f, 0.894f, 0.980f, 1.00f); // #E9E4FA
-    public static readonly Vector4 Muted      = new(0.604f, 0.561f, 0.745f, 1.00f); // #9A8FBE
+    public static readonly Vector4 Text       = new(0.965f, 0.949f, 1.000f, 1.00f); // near-white violet
+    public static readonly Vector4 Muted      = new(0.760f, 0.710f, 0.900f, 1.00f); // lifted #9A8FBE
 
     public static readonly Vector4 Good       = new(0.369f, 0.878f, 0.784f, 1.00f); // #5EE0C8 teal
     public static readonly Vector4 GoodSoft   = new(0.369f, 0.878f, 0.784f, 0.14f);
@@ -69,9 +72,9 @@ public static class Theme
         (ImGuiCol.HeaderHovered,         new Vector4(0.608f, 0.420f, 1.000f, 0.45f)),
         (ImGuiCol.HeaderActive,          AccentSoft),
         (ImGuiCol.Separator,             Border),
-        (ImGuiCol.ScrollbarBg,           Surface),
-        (ImGuiCol.ScrollbarGrab,         SurfaceAlt),
-        (ImGuiCol.ScrollbarGrabHovered,  new Vector4(0.278f, 0.231f, 0.435f, 1f)),
+        (ImGuiCol.ScrollbarBg,           WindowBg),
+        (ImGuiCol.ScrollbarGrab,         Border),
+        (ImGuiCol.ScrollbarGrabHovered,  Accent),
         (ImGuiCol.ScrollbarGrabActive,   Accent),
         (ImGuiCol.Tab,                   Surface),
         (ImGuiCol.TabHovered,            AccentSoft),

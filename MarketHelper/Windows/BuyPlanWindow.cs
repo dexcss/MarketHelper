@@ -27,6 +27,29 @@ public sealed class BuyPlanWindow : ShellWindow
         _plugin = plugin;
     }
 
+    // Same blocky geometry + visible input tracks as the main window.
+    public override void PreDraw()
+    {
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, Theme.RadiusControl);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, Theme.RadiusCard);
+        ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, Theme.RadiusControl);
+        ImGui.PushStyleVar(ImGuiStyleVar.GrabRounding, Theme.RadiusControl);
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(Theme.Gap * 0.8f, Theme.Gap * 0.5f));
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(Theme.Gap * 0.9f, Theme.Gap * 0.7f));
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemInnerSpacing, new Vector2(Theme.Gap * 0.6f, Theme.Gap * 0.4f));
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, Theme.Surface);
+        base.PreDraw();
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(0.196f, 0.161f, 0.310f, 1f));
+    }
+
+    public override void PostDraw()
+    {
+        ImGui.PopStyleColor(1);
+        base.PostDraw();
+        ImGui.PopStyleColor(1);
+        ImGui.PopStyleVar(7);
+    }
+
     protected override void DrawBody()
     {
         var buyer = _plugin.Buyer;
