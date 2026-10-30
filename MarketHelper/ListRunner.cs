@@ -697,43 +697,79 @@ public sealed class ListRunner
     }
 
     /// <summary>
-    /// Given ascending prices, choose the base price to undercut, applying the outlier gap check:
-    /// Prices at the mode (most common listing price); lone cheaper outliers are ignored.
-    /// price against the next one (repeatedly, in case several trolls stack). Returns the base
-    /// price and an optional note describing any skip.
+    /// Given ascending prices, choose the base price to undercut, in two passes:
+    ///
+    /// Pass 1 — troll-cluster guard. A price cluster sitting less than 1/Nth of the NEXT cluster
+    /// up (N = <see cref="Configuration.ListerTrollPriceMultiple"/>, 0 disables) is a troll floor
+    /// and is skipped. Without this, THREE troll listings at 1 gil under a 980 gil wall win the
+    /// mode vote and the item lists at 1 gil — seen live on Thick-rimmed Goggles (2026-10-30).
+    /// Clusters (distinct prices with counts) are compared, not consecutive rows, so a repeated
+    /// troll price can't hide inside its own cluster, and the ratio rule leaves genuine sparse
+    /// markets ([100g, 200g] is only 2x) and junk items ([1g, 2g, 3g]) untouched.
+    ///
+    /// Pass 2 — mode of the survivors: price at the most common listing (the real "wall");
+    /// undercutter prices cluster on round numbers, so lone cheaper outliers don't repeat and are
+    /// naturally out-voted. Falls back to the cheapest survivor if nothing repeats.
     /// </summary>
     private (long Base, string? Note) ChooseBasePrice(IReadOnlyList<long> ascending)
     {
         if (ascending.Count == 0) return (0, null);
         if (ascending.Count == 1) return (ascending[0], null);
 
-        // Price at the MODE — the most common price among the listings. Undercutters cluster on the
-        // same round numbers, so the mode is the real "wall" price; lone low outliers (trolls or
-        // stale listings) don't repeat and are naturally ignored. Falls back to the cheapest if no
-        // price repeats at all.
-        var counts = new Dictionary<long, int>();
+        // Cluster the ascending prices: distinct price -> how many listings carry it.
+        var clusters = new List<(long Price, int Count)>();
         foreach (var p in ascending)
-            counts[p] = counts.TryGetValue(p, out var c) ? c + 1 : 1;
-
-        long modePrice = ascending[0];
-        var modeCount = 0;
-        foreach (var kv in counts)
         {
-            // Prefer the most frequent price; on a tie, prefer the LOWER price (stay competitive).
-            if (kv.Value > modeCount || (kv.Value == modeCount && kv.Key < modePrice))
+            if (clusters.Count > 0 && clusters[^1].Price == p)
+                clusters[^1] = (clusters[^1].Price, clusters[^1].Count + 1);
+            else
+                clusters.Add((p, 1));
+        }
+
+        // Pass 1: skip troll floors — a cluster priced below 1/N of the next cluster up.
+        var start = 0;
+        var skipped = 0;
+        long skippedPrice = 0;
+        var multiple = Math.Clamp(Cfg.ListerTrollPriceMultiple, 0f, 1000f);
+        if (multiple > 0)
+        {
+            while (start < clusters.Count - 1)
             {
-                modeCount = kv.Value;
-                modePrice = kv.Key;
+                var cur = clusters[start];
+                var next = clusters[start + 1];
+                if (cur.Price <= 0 || next.Price <= 0) break;   // zero/nonsense prices: stop guessing
+                if (next.Price >= cur.Price * multiple)
+                {
+                    skipped += cur.Count;
+                    skippedPrice = cur.Price;
+                    start++;
+                    continue;
+                }
+                break;
             }
         }
 
-        // If nothing repeats (every listing unique), there's no cluster — just use the cheapest.
-        if (modeCount <= 1)
-            return (ascending[0], null);
+        // Pass 2: mode of the survivors; on a tie, prefer the LOWER price (stay competitive).
+        long modePrice = clusters[start].Price;
+        var modeCount = 0;
+        for (var i = start; i < clusters.Count; i++)
+        {
+            if (clusters[i].Count > modeCount
+                || (clusters[i].Count == modeCount && clusters[i].Price < modePrice))
+            {
+                modeCount = clusters[i].Count;
+                modePrice = clusters[i].Price;
+            }
+        }
+        // Nothing repeats among the survivors — there is no wall to price against; use the
+        // cheapest survivor, exactly as the old all-distinct fallback did.
+        if (modeCount <= 1) modePrice = clusters[start].Price;
 
-        string? note = modePrice > ascending[0]
-            ? $"priced at the most common listing {modePrice:N0} (skipped {ascending[0]:N0} and other cheaper outliers)"
-            : null;
+        string? note = null;
+        if (skipped > 0)
+            note = $"skipped {skipped} listing(s) at {skippedPrice:N0}g and below (troll floor)";
+        if (modePrice > clusters[start].Price)
+            note = (note == null ? "" : note + "; ") + $"priced at the most common listing {modePrice:N0}";
         return (modePrice, note);
     }
 

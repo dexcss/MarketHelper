@@ -106,6 +106,13 @@ public partial class MainWindow
         ImGui.SameLine(0, SW(6));
         HelpMarker("Prices at the most common listing price (the real 'wall'), then subtracts this many gil. Lone cheap outliers (trolls / stale listings) are ignored automatically.");
 
+        ImGui.SetNextItemWidth(SW(140));
+        var trollMult = Cfg.ListerTrollPriceMultiple;
+        if (ImGui.SliderFloat("Troll floor (x)", ref trollMult, 0f, 50f, "%.0f x"))
+        { Cfg.ListerTrollPriceMultiple = trollMult; Cfg.Save(); }
+        ImGui.SameLine(0, SW(6));
+        HelpMarker("A price cluster below 1/N of the next cluster up is a troll floor and is skipped before choosing the wall. Stops '3 listings at 1 gil under a 980 gil wall' from listing yours at 1 gil. 5 = a listing at 1/5th or less of the next price up is a troll. 0 disables the guard (old behavior).");
+
         // Manual overrides if auto-detect failed.
         if (string.IsNullOrEmpty(detectedWorld))
         {

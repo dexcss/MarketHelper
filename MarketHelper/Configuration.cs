@@ -145,6 +145,13 @@ public class Configuration : IPluginConfiguration
     public string ListerWorldOverride { get; set; } = "";  // manual world if auto-detect fails
     public string ListerDcOverride { get; set; } = "";     // manual DC if auto-detect fails
 
+    // Troll-cluster guard: a price cluster that sits less than 1/Nth of the NEXT cluster up is
+    // treated as a troll floor and skipped when choosing the base price. Seen live: three listings
+    // at 1 gil under a 980 gil wall out-voted the wall in the mode vote and the item listed at
+    // 1 gil. A ratio (not a percent gap) keeps genuine sparse markets intact — a [100g, 200g]
+    // spread is 2x and is left alone — while [1g x3, 980g] (980x) is skipped. 0 disables.
+    public float ListerTrollPriceMultiple { get; set; } = 5.0f;
+
     // --- Buyer settings ---
     // Shopping list: what to buy, how many, and (optionally) a hard per-unit price ceiling.
     public List<BuyerItem> BuyerItems { get; set; } = new();
