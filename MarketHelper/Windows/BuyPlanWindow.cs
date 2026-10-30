@@ -1,39 +1,33 @@
 using System;
 using System.Linq;
 using System.Numerics;
-using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
+using MarketHelper.FancyUI;
 using static MarketHelper.UiScale;
 
 namespace MarketHelper.Windows;
 
 /// <summary>
 /// The Buyer's scan-result popup: what's available, where, and what it would cost, with the SEND
-/// button that hands the plan to BuyRunner.
+/// button that hands the plan to BuyRunner. Rendered in the Fancy UI shell.
 ///
 /// Everything here is a SNAPSHOT of Universalis at scan time. The prices shown are what we expect,
 /// not what will be paid — the runner re-checks every one against the live board and drops any
 /// that have moved above your cap.
 /// </summary>
-public sealed class BuyPlanWindow : Window
+public sealed class BuyPlanWindow : ShellWindow
 {
     private readonly Plugin _plugin;
     private Configuration Cfg => _plugin.Config;
 
     public BuyPlanWindow(Plugin plugin)
-        : base("Market Helper — Buy Plan##BuyPlan", ImGuiWindowFlags.None)
+        : base("MarketHelper##BuyPlan", "Buy Plan",
+               new Vector2(520, 400), new Vector2(1600, 1400))
     {
         _plugin = plugin;
-        SizeConstraints = new WindowSizeConstraints
-        {
-            MinimumSize = SV(520, 400),
-            MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
-        };
-        Size = SV(640, 560);
-        SizeCondition = ImGuiCond.FirstUseEver;
     }
 
-    public override void Draw()
+    protected override void DrawBody()
     {
         var buyer = _plugin.Buyer;
         var runner = _plugin.Buy;
@@ -53,7 +47,7 @@ public sealed class BuyPlanWindow : Window
                 Dummy(2f);
                 WrapText(Red, buyer.Error!);
                 Dummy(6f);
-                if (ImGui.Button("Try again", new Vector2(SW(110), 0))) buyer.Scan();
+                if (UiKit.ChipButton("##fancy-ptry", "TRY AGAIN")) buyer.Scan();
                 return;
             }
             ImGui.TextColored(Grey, "No scan yet. Press SCAN on the Buyer tab.");
@@ -71,37 +65,37 @@ public sealed class BuyPlanWindow : Window
             ImGui.TextColored(Red, "Nothing available at or under your price caps.");
 
         Dummy(4f);
-        if (ImGui.Button("Re-scan", new Vector2(SW(110), 0))) buyer.Scan();
-        ImGui.SameLine(0, SW(8));
+        if (UiKit.ChipButton("##fancy-prescan", "RE-SCAN")) buyer.Scan();
+        ImGui.SameLine(0, Theme.Gap);
         using (Disabled(runner.Running || !plan.HasWork))
         {
-            if (ImGui.Button("SEND", new Vector2(SW(160), 0)))
+            if (UiKit.ChipButton("##fancy-psend", Cfg.BuyerDryRun ? "SEND (DRY RUN)" : "SEND — LIVE", active: true))
                 runner.Start(plan, Cfg.BuyerDryRun);
         }
         if (runner.IsPaused)
         {
-            ImGui.SameLine(0, SW(8));
-            if (ImGui.Button("RESUME", new Vector2(SW(100), 0))) runner.Resume();
+            ImGui.SameLine(0, Theme.Gap);
+            if (UiKit.ChipButton("##fancy-presume", "RESUME")) runner.Resume();
         }
         else if (runner.Running)
         {
-            ImGui.SameLine(0, SW(8));
-            if (ImGui.Button("Pause", new Vector2(SW(80), 0))) runner.PauseByUser();
+            ImGui.SameLine(0, Theme.Gap);
+            if (UiKit.ChipButton("##fancy-ppause", "PAUSE")) runner.PauseByUser();
         }
         if (runner.Running)
         {
-            ImGui.SameLine(0, SW(8));
-            if (ImGui.Button("Stop", new Vector2(SW(80), 0))) runner.Stop();
+            ImGui.SameLine(0, Theme.Gap);
+            if (UiKit.ChipButton("##fancy-pstop", "STOP")) runner.Stop();
         }
-        ImGui.SameLine(0, SW(8));
-        ImGui.TextColored(Cfg.BuyerDryRun ? Blue : Gold, Cfg.BuyerDryRun ? "dry run" : "LIVE — will spend gil");
+        ImGui.SameLine(0, Theme.Gap);
+        UiKit.Chip(Cfg.BuyerDryRun ? "DRY RUN" : "LIVE — WILL SPEND GIL", Cfg.BuyerDryRun ? Theme.Muted : Theme.Warn);
 
         // Progress against this plan survives Stop -> SEND. If you've emptied your bags elsewhere
         // or want to start the plan over, this is the escape hatch.
         if (!runner.Running && plan.Bought.Count > 0)
         {
-            ImGui.SameLine(0, SW(8));
-            if (ImGui.Button("Reset progress##resetbought"))
+            ImGui.SameLine(0, Theme.Gap);
+            if (UiKit.ChipButton("##fancy-preset", "RESET PROGRESS"))
             {
                 plan.ClearProgress();
                 _plugin.Chat("[Market Helper] Buy progress for this plan cleared.");
@@ -326,15 +320,15 @@ public sealed class BuyPlanWindow : Window
         ImGui.SameLine(0, SW(10));
         ImGui.Checkbox("Problems only", ref _auditProblemsOnly);
         ImGui.SameLine(0, SW(10));
-        if (ImGui.Button("Save now##auditsave"))
+        if (UiKit.ChipButton("##fancy-pauditsave", "SAVE NOW"))
         {
             var path = BuyAuditWriter.Save(runner.Audit, runner.DryRun);
             _plugin.Chat(path != null
                 ? $"[Market Helper] Audit log saved: {path}"
                 : "[Market Helper] Couldn't write the audit log.");
         }
-        ImGui.SameLine(0, SW(6));
-        if (ImGui.Button("Open folder##auditfolder"))
+        ImGui.SameLine(0, Theme.Gap);
+        if (UiKit.ChipButton("##fancy-pauditfolder", "OPEN FOLDER"))
         {
             try
             {
@@ -408,12 +402,5 @@ public sealed class BuyPlanWindow : Window
         private readonly bool _on;
         public DisabledScope(bool on) { _on = on; if (on) ImGui.BeginDisabled(); }
         public void Dispose() { if (_on) ImGui.EndDisabled(); }
-    }
-
-    private static void Divider()
-    {
-        Dummy(4f);
-        ImGui.Separator();
-        Dummy(4f);
     }
 }

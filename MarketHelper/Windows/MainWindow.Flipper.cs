@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using Dalamud.Interface;
 using Dalamud.Bindings.ImGui;
 using MarketHelper;
+using MarketHelper.FancyUI;
 using static MarketHelper.UiScale;
 
 namespace MarketHelper.Windows;
@@ -56,7 +58,7 @@ public partial class MainWindow
 
         Dummy(4f);
 
-        SectionHeader("Cross-region flip");
+        UiKit.Section(FontAwesomeIcon.MoneyBillTrendUp, "cross-region flip");
         if (Flip.Loading)
         {
             ImGui.TextColored(Gold, $"Searching markets for {Flip.ItemName}...");
@@ -125,7 +127,7 @@ public partial class MainWindow
         }
 
         // --- Tax controls ---
-        SectionHeader("Tax settings");
+        UiKit.Section(FontAwesomeIcon.Percent, "tax settings");
         var sellerTax = Cfg.ApplySellerTax;
         if (ImGui.Checkbox("Seller tax", ref sellerTax)) { Cfg.ApplySellerTax = sellerTax; Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
@@ -154,7 +156,7 @@ public partial class MainWindow
         ImGui.Separator();
 
         // --- Per-region columns ---
-        SectionHeader("Listings per region");
+        UiKit.Section(FontAwesomeIcon.Globe, "listings per region");
         if (ImGui.BeginTable("##flipregions", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
         {
             foreach (var region in Flipper.Regions)

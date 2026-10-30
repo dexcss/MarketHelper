@@ -1,3 +1,4 @@
+using System;
 using System.Numerics;
 using Dalamud.Interface.Utility;
 using Dalamud.Bindings.ImGui;
@@ -5,9 +6,13 @@ using Dalamud.Bindings.ImGui;
 namespace MarketHelper;
 
 /// <summary>
-/// High-DPI / 4K QOL helpers, ported from the conventions used across FCTracker,
-/// VenueHelper and HousingLottoTracker. Every fixed pixel dimension in a window
-/// should pass through these so nothing clips or overflows at scales like 4K @ 230%.
+/// High-DPI / 4K helpers (SW/SV/Dummy/WrapText) and the legacy colour names used across the
+/// plugin's windows. As of the Fancy UI reskin the palette VALUES come from
+/// <see cref="FancyUI.Theme"/> so every existing TextColored call renders in the theme:
+/// Gold→accent violet, Green→good teal, Red→danger, Blue/Grey→muted.
+///
+/// Every fixed pixel dimension in a window should pass through <see cref="SW"/> so nothing
+/// clips or overflows at scales like 4K @ 230%.
 /// </summary>
 public static class UiScale
 {
@@ -42,10 +47,30 @@ public static class UiScale
         ImGui.PopTextWrapPos();
     }
 
-    // Shared palette matching the VenueHelper convention.
-    public static readonly Vector4 Gold = new(1.0f, 0.84f, 0.10f, 1.0f);
-    public static readonly Vector4 Green = new(0.40f, 0.95f, 0.40f, 1.0f);
-    public static readonly Vector4 Red = new(0.95f, 0.40f, 0.40f, 1.0f);
-    public static readonly Vector4 Blue = new(0.50f, 0.75f, 1.0f, 1.0f);
-    public static readonly Vector4 Grey = new(0.6f, 0.6f, 0.6f, 1.0f);
+    // ---- Legacy palette names, now themed ------------------------------------------------
+    // Gold/Green/Red/Blue/Grey predate the Fancy UI and are used across every tab partial;
+    // they now resolve to the FancyUI.Theme tokens so the whole plugin shares one palette.
+
+    /// <summary>Accent / attention (was gold, now the violet accent).</summary>
+    public static readonly Vector4 Gold = FancyUI.Theme.Accent;
+
+    /// <summary>Success / running (was green, now the theme's good teal).</summary>
+    public static readonly Vector4 Green = FancyUI.Theme.Good;
+
+    /// <summary>Danger (was red, now the theme's danger red).</summary>
+    public static readonly Vector4 Red = FancyUI.Theme.Danger;
+
+    /// <summary>Informational (was blue, now muted).</summary>
+    public static readonly Vector4 Blue = FancyUI.Theme.Muted;
+
+    /// <summary>Dim / idle (was grey, now muted).</summary>
+    public static readonly Vector4 Grey = FancyUI.Theme.Muted;
+
+    /// <summary>A scaled separator with padding above and below.</summary>
+    public static void Divider()
+    {
+        Dummy(4f);
+        ImGui.Separator();
+        Dummy(4f);
+    }
 }

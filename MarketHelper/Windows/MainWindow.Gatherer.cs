@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using Dalamud.Interface;
 using ECommons.DalamudServices;
 using Dalamud.Bindings.ImGui;
+using MarketHelper.FancyUI;
 using static MarketHelper.UiScale;
 
 namespace MarketHelper.Windows;
@@ -16,15 +18,20 @@ public partial class MainWindow
         WrapText("Pulls designated items off your retainers into your main inventory. Walks the bell, retrieves the items you list below, and stops when your bags are full. Empty your bags and run again to continue.");
         Dummy(6f);
 
-        SectionHeader("What to pull");
-        var fromInv = Cfg.GatherFromInventory;
-        if (ImGui.Checkbox("Pull from retainer inventory", ref fromInv)) { Cfg.GatherFromInventory = fromInv; Cfg.Save(); }
-        var fromMkt = Cfg.GatherFromMarket;
-        if (ImGui.Checkbox("Pull from market listings (returns them first)", ref fromMkt)) { Cfg.GatherFromMarket = fromMkt; Cfg.Save(); }
+        UiKit.Section(FontAwesomeIcon.Download, "what to pull");
+        var fromInv = UiKit.Toggle("##fancy-ginv", Cfg.GatherFromInventory);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextUnformatted("Pull from retainer inventory");
+        if (fromInv != Cfg.GatherFromInventory) { Cfg.GatherFromInventory = fromInv; Cfg.Save(); }
+
+        var fromMkt = UiKit.Toggle("##fancy-gmkt", Cfg.GatherFromMarket);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextUnformatted("Pull from market listings (returns them first)");
         ImGui.SameLine(0, SW(6));
         HelpMarker("When on, designated items currently listed on the market are returned to the retainer's inventory, then retrieved into your bags. When off, only items already in the retainer's inventory are pulled.");
+        if (fromMkt != Cfg.GatherFromMarket) { Cfg.GatherFromMarket = fromMkt; Cfg.Save(); }
 
-        SectionHeader("Items to gather");
+        UiKit.Section(FontAwesomeIcon.BoxOpen, "items to gather");
         // Quick-add + search-add, both target the gather list.
         var ctrl = ImGui.GetIO().KeyCtrl;
         ImGui.TextColored(ctrl ? Green : Grey, ctrl ? "CTRL held — hover an item to add it." : "Hold CTRL and hover an item to quick-add.");
@@ -62,7 +69,7 @@ public partial class MainWindow
             }
         }
 
-        SectionHeader($"Items to gather ({Cfg.GathererItems.Count})");
+        UiKit.Section(FontAwesomeIcon.BoxOpen, $"items to gather ({Cfg.GathererItems.Count})");
         if (Cfg.GathererItems.Count == 0)
         {
             ImGui.TextColored(Grey, "  (empty — add items above)");
@@ -105,7 +112,7 @@ public partial class MainWindow
             if (ImGui.Button("Clear list", new Vector2(SW(120), 0))) { Cfg.GathererItems.Clear(); Cfg.Save(); }
         }
 
-        SectionHeader("Run");
+        UiKit.Section(FontAwesomeIcon.Play, "run");
         var free = RetainerReader.FreePlayerBagSlots();
         ImGui.TextColored(free > 0 || free < 0 ? Grey : Red, free < 0 ? "Free inventory slots: (open to check)" : $"Free inventory slots: {free}");
 
@@ -113,39 +120,39 @@ public partial class MainWindow
         var g = _plugin.Gatherer;
         if (g.Running)
         {
-            if (ImGui.Button("Stop", new Vector2(SW(120), 0))) g.Stop();
-            ImGui.SameLine(0, SW(8));
+            if (UiKit.GradientButton("##fancy-gstop", "STOP", Theme.Danger, Theme.Danger, 36f)) g.Stop();
+            ImGui.SameLine(0, Theme.Gap);
             ImGui.TextColored(Gold, g.Status);
         }
         else
         {
             using (ImRaiiDisabled(Cfg.GathererItems.Count == 0))
             {
-                if (ImGui.Button("Run — gather items", new Vector2(SW(200), 0)))
+                if (UiKit.GradientButton("##fancy-grun", "RUN — GATHER ITEMS", Theme.Accent, Theme.Good, 40f))
                     g.Start();
             }
-            ImGui.SameLine(0, SW(8));
+            ImGui.SameLine(0, Theme.Gap);
             ImGui.TextColored(Grey, g.Status);
         }
 
-        SectionHeader("Manual actions");
+        UiKit.Section(FontAwesomeIcon.HandHolding, "manual actions");
         WrapText(Grey, "Operate on the window you already have open:");
-        Dummy(2f);
+        Dummy(2);
         var m = _plugin.Manual;
         using (ImRaiiDisabled(m.Running || Cfg.GathererItems.Count == 0))
         {
-            if (ImGui.Button("Withdraw all (from open retainer)", new Vector2(SW(280), 0)))
+            if (UiKit.ChipButton("##fancy-gwd", "WITHDRAW ALL (FROM OPEN RETAINER)", false, ImGui.GetContentRegionAvail().X))
                 m.Start(ManualMode.WithdrawAll);
             HelpMarkerLine("Open a retainer's inventory yourself, then click to pull all your listed items from it into your bags.");
 
-            if (ImGui.Button("Deposit all → open retainer", new Vector2(SW(280), 0)))
+            if (UiKit.ChipButton("##fancy-gdp", "DEPOSIT ALL → OPEN RETAINER", false, ImGui.GetContentRegionAvail().X))
                 m.Start(ManualMode.DepositRetainer);
             HelpMarkerLine("Open a retainer's inventory, then click to entrust all your listed items from your bags into it.");
         }
         if (m.Running)
         {
-            ImGui.SameLine(0, SW(8));
-            if (ImGui.Button("Stop##manual", new Vector2(SW(80), 0))) m.Stop();
+            ImGui.SameLine(0, Theme.Gap);
+            if (UiKit.ChipButton("##fancy-gmstop", "STOP", false)) m.Stop();
         }
         if (!string.IsNullOrEmpty(m.Status) && m.Status != "Idle.")
             ImGui.TextColored(m.Running ? Gold : Grey, m.Status);

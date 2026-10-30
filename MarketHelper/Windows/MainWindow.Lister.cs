@@ -1,10 +1,12 @@
 using System;
+using Dalamud.Interface;
 using Dalamud.Interface.Textures;
 using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using ECommons.DalamudServices;
 using MarketHelper;
+using MarketHelper.FancyUI;
 using static MarketHelper.UiScale;
 
 namespace MarketHelper.Windows;
@@ -30,11 +32,9 @@ public partial class MainWindow
 
         // Which list do adds go to?
         ImGui.Text("Add to:");
-        ImGui.SameLine();
-        var toSession = _addToSession;
-        if (ImGui.RadioButton("Session", toSession)) _addToSession = true;
-        ImGui.SameLine();
-        if (ImGui.RadioButton("Permanent", !toSession)) _addToSession = false;
+        ImGui.SameLine(0, Theme.Gap);
+        var addIdx = UiKit.Segmented("##fancy-addto", new[] { "Session", "Permanent" }, _addToSession ? 0 : 1);
+        _addToSession = addIdx == 0;
         ImGui.SameLine(0, SW(6));
         HelpMarker("Session items clear when the plugin reloads or the game closes (or via 'Clear session'). Permanent items are saved and persist. Both are listed when you press Go.");
 
@@ -78,7 +78,7 @@ public partial class MainWindow
             }
         }
 
-        SectionHeader("Pricing");
+        UiKit.Section(FontAwesomeIcon.Coins, "pricing");
 
         // --- Pricing options ---
         var detectedWorld = WorldInfo.CurrentWorld();
@@ -91,12 +91,9 @@ public partial class MainWindow
             : $"{detectedWorld} / {detectedDc} / {detectedRegion}");
 
         ImGui.Text("Undercut the lowest on:");
-        var scope = Cfg.ListerPriceScope;
-        if (ImGui.RadioButton("My world", ref scope, 0)) { Cfg.ListerPriceScope = 0; Cfg.Save(); }
-        ImGui.SameLine();
-        if (ImGui.RadioButton("My Data Center", ref scope, 1)) { Cfg.ListerPriceScope = 1; Cfg.Save(); }
-        ImGui.SameLine();
-        if (ImGui.RadioButton("My whole Region", ref scope, 2)) { Cfg.ListerPriceScope = 2; Cfg.Save(); }
+        var scope = Math.Clamp(Cfg.ListerPriceScope, 0, 2);
+        var scopeIdx = UiKit.Segmented("##fancy-lscope", new[] { "My world", "My DC", "Region" }, scope);
+        if (scopeIdx != scope) { Cfg.ListerPriceScope = scopeIdx; Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
         HelpMarker("Price to beat the cheapest listing at this scope (via Universalis). Region = e.g. all of North-America. Wider scope means a lower target price.");
 
@@ -120,36 +117,32 @@ public partial class MainWindow
             DrawDcWorldSelectors();
         }
 
-        SectionHeader("Lists");
+        UiKit.Section(FontAwesomeIcon.ListUl, "lists");
         // --- Session list ---
         DrawItemList("Session list", _plugin.SessionListerItems, "sess", isSession: true);
         // --- Permanent list ---
         DrawItemList("Permanent list", Cfg.ListerItems, "perm", isSession: false);
 
-        SectionHeader("Run");
+        UiKit.Section(FontAwesomeIcon.Play, "run");
         var lr = _plugin.Lister;
         var totalItems = _plugin.AllListerItems().Count;
         if (lr.Running)
         {
-            if (ImGui.Button("Stop", new Vector2(SW(120), 0))) lr.Stop();
-            ImGui.SameLine(0, SW(8));
+            if (UiKit.GradientButton("##fancy-lstop", "STOP", Theme.Danger, Theme.Danger, 36f)) lr.Stop();
+            ImGui.SameLine(0, Theme.Gap);
             ImGui.TextColored(Gold, lr.Status);
         }
         else
         {
             using (ImRaiiDisabled(totalItems == 0))
             {
-                if (ImGui.Button("Dry run (preview only)", new Vector2(SW(200), 0)))
+                if (UiKit.GradientButton("##fancy-ldry", "DRY RUN — PREVIEW ONLY", Theme.Accent, Theme.Muted, 34f))
                     lr.Start(dryRun: true);
-                ImGui.SameLine(0, SW(8));
-                if (ImGui.Button("Go — list for real", new Vector2(SW(160), 0)))
+                if (UiKit.GradientButton("##fancy-lgo", "GO — LIST FOR REAL", Theme.Accent, Theme.Good, 40f))
                     lr.Start(dryRun: false);
             }
             if (!string.IsNullOrEmpty(lr.Status) && lr.Status != "Idle.")
-            {
-                ImGui.SameLine(0, SW(8));
                 ImGui.TextColored(Grey, lr.Status);
-            }
         }
         ImGui.TextColored(Grey, "Dry run walks the bell and logs what it WOULD list (no market changes). Run it first to confirm items and prices look right.");
 

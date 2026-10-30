@@ -3,19 +3,18 @@ using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Interface;
 using Dalamud.Interface.ImGuiFileDialog;
-using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
-using MarketHelper;
+using MarketHelper.FancyUI;
 using static MarketHelper.UiScale;
 
 namespace MarketHelper.Windows;
 
 /// <summary>
-/// Main plugin window. This file is the shell: construction, the tab bar, the always-visible
-/// run section, and shared UI helpers. Each tab lives in its own MainWindow.*.cs partial so
-/// new tabs can be dropped in without touching this file (VenueHelper layout convention).
+/// Main plugin window: the Fancy UI shell (custom title bar, drag, resize grip) around the tab
+/// body. Each tab lives in its own MainWindow.*.cs partial so new tabs can be dropped in without
+/// touching this file. The reskin is presentation-only — behaviour code is unchanged.
 /// </summary>
-public partial class MainWindow : Window
+public partial class MainWindow : ShellWindow
 {
     private readonly Plugin _plugin;
     private Configuration Cfg => _plugin.Config;
@@ -25,20 +24,63 @@ public partial class MainWindow : Window
     private readonly FileDialogManager _fileDialog = new();
 
     public MainWindow(Plugin plugin)
-        : base("Market Helper##Main", ImGuiWindowFlags.None)
+        : base("MarketHelper##Main", "Market Helper",
+               new Vector2(480, 560), new Vector2(1600, 1400))
     {
         _plugin = plugin;
-        // Scaled constraints so the window stays usable at 4K / high global scale.
-        SizeConstraints = new WindowSizeConstraints
-        {
-            MinimumSize = SV(480, 560),
-            MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
-        };
-        Size = SV(520, 600);
-        SizeCondition = ImGuiCond.FirstUseEver;
     }
 
-    public override void Draw()
+    // Blocky geometry for the stock widgets that remain (text fields, sliders, combos, tables):
+    // square-ish corners and roomier padding, on top of the colour theme the shell already pushes.
+    public override void PreDraw()
+    {
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, Theme.RadiusControl);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, Theme.RadiusCard);
+        ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, Theme.RadiusControl);
+        ImGui.PushStyleVar(ImGuiStyleVar.GrabRounding, Theme.RadiusControl);
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(Theme.Gap * 0.8f, Theme.Gap * 0.5f));
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(Theme.Gap * 0.9f, Theme.Gap * 0.7f));
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemInnerSpacing, new Vector2(Theme.Gap * 0.6f, Theme.Gap * 0.4f));
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, Theme.Surface);
+        base.PreDraw();
+    }
+
+    public override void PostDraw()
+    {
+        ImGui.PopStyleColor(1);
+        ImGui.PopStyleVar(7);
+        base.PostDraw();
+    }
+
+    /// <summary>Version chip + one status dot per runner, drawn into the free title-bar span.</summary>
+    protected override void DrawHeaderExtras(Vector2 freeMin, Vector2 freeMax)
+    {
+        var dl = ImGui.GetWindowDrawList();
+        var y = (freeMin.Y + freeMax.Y) * 0.5f;
+        var x = freeMin.X + Theme.Gap;
+
+        var ver = typeof(MainWindow).Assembly.GetName().Version;
+        var verText = ver == null ? string.Empty : "v" + ver.ToString(3);
+        var ts = ImGui.CalcTextSize(verText);
+        dl.AddText(new Vector2(x, y - ts.Y * 0.5f), Theme.U32(Theme.Muted), verText);
+        x += ts.X + Theme.Gap * 2f;
+
+        (bool Running, string Name)[] runners =
+        {
+            (_plugin.Nav.Running, "Undercut"),
+            (_plugin.Lister.Running, "Lister"),
+            (_plugin.Gatherer.Running, "Gatherer"),
+            (_plugin.Buy.Running, "Buyer"),
+        };
+        foreach (var (running, _) in runners)
+        {
+            dl.AddCircleFilled(new Vector2(x, y), 4f * Theme.UiScale,
+                Theme.U32(running ? Theme.Good : Theme.Muted));
+            x += 12f * Theme.UiScale;
+        }
+    }
+
+    protected override void DrawBody()
     {
         if (ImGui.BeginTabBar("##markethelper_tabs"))
         {
@@ -81,7 +123,7 @@ public partial class MainWindow : Window
     /// <summary>The Undercut tab: the run section plus its sub-tabs (Settings/Overrides/etc).</summary>
     private void DrawUndercutTab()
     {
-        SectionHeader("Undercut run");
+        UiKit.Section(FontAwesomeIcon.Tags, "undercut run");
         DrawRunSection();
 
         if (ImGui.CollapsingHeader("Undercut settings, overrides and report"))
@@ -118,37 +160,52 @@ public partial class MainWindow : Window
         var listener = _plugin.Listener;
         var nav = _plugin.Nav;
 
-        // --- Full standalone walk ---
-        WrapText("Stand near a summoning bell, then Run. Opens the bell and undercuts every item on every retainer.");
-        Dummy(2f);
+        // Hero status card (the Fancy UI pattern): status label, live status, one-line hint.
+        var s = Theme.UiScale;
+        var p = ImGui.GetCursorScreenPos();
+        var size = new Vector2(ImGui.GetContentRegionAvail().X, 92f * s);
+        var dl = ImGui.GetWindowDrawList();
+        UiKit.Card(dl, p, p + size, null, glow: nav.Running ? 0.10f : 0f);
+
+        ImGui.SetCursorScreenPos(p + new Vector2(Theme.Pad, Theme.Pad));
+        ImGui.TextColored(nav.Running ? Theme.Good : Theme.Muted, nav.Running ? "RUNNING" : "READY");
+        ImGui.SetCursorScreenPos(p + new Vector2(Theme.Pad, Theme.Pad + 20f * s));
+        ImGui.TextColored(Theme.Text, nav.Status);
+        ImGui.SetCursorScreenPos(p + new Vector2(Theme.Pad, Theme.Pad + 48f * s));
+        ImGui.PushTextWrapPos(p.X + size.X - Theme.Pad);
+        ImGui.TextColored(Theme.Muted, "Stand near a summoning bell, then run. Opens the bell and undercuts every item on every retainer.");
+        ImGui.PopTextWrapPos();
+        ImGui.SetCursorScreenPos(new Vector2(p.X, p.Y + size.Y + Theme.Gap));
 
         if (nav.Running)
         {
-            if (ImGui.Button("Stop", new Vector2(SW(120), 0))) nav.Stop();
+            if (UiKit.GradientButton("##fancy-nav-stop", "STOP", Theme.Danger, Theme.Danger, 36f))
+                nav.Stop();
         }
         else
         {
-            if (ImGui.Button("Run (walk all retainers)", new Vector2(SW(220), 0))) nav.Start();
+            if (UiKit.GradientButton("##fancy-nav-run", "RUN — WALK ALL RETAINERS", Theme.Accent, Theme.Good, 40f))
+                nav.Start();
         }
-        ImGui.SameLine(0, SW(8));
-        ImGui.TextColored(nav.Running ? Gold : Grey, nav.Status);
-
-        Divider();
 
         // --- Reactive / on-demand ---
+        UiKit.Section(FontAwesomeIcon.Bolt, "reactive");
         var auto = Cfg.MarketHelperOnOpen;
-        if (ImGui.Checkbox("Auto-undercut on open (even when NOT running)", ref auto))
-        { Cfg.MarketHelperOnOpen = auto; Cfg.Save(); }
+        var autoNew = UiKit.Toggle("##fancy-autoopen", auto);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextUnformatted("Auto-undercut on open (even when NOT running)");
         ImGui.SameLine(0, SW(6));
         HelpMarker("Off by default. When ON, ANY item whose sell window opens gets undercut — even if you're just managing a retainer by hand. Leave off unless you want that.");
+        if (autoNew != auto)
+        { Cfg.MarketHelperOnOpen = autoNew; Cfg.Save(); }
 
         using (ImRaiiDisabled(!Addons.Exists("RetainerSell") || listener.Busy))
         {
-            if (ImGui.Button("Undercut open item", new Vector2(SW(200), 0)))
+            if (UiKit.ChipButton("##fancy-price-now", "UNDERCUT OPEN ITEM", false, 220f * Theme.UiScale))
                 listener.PriceOpenItemNow();
         }
-        ImGui.SameLine(0, SW(8));
-        ImGui.TextColored(listener.Busy ? Gold : Grey, listener.Status);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(listener.Busy ? Theme.Warn : Theme.Muted, listener.Status);
     }
 
     // Minimal BeginDisabled/EndDisabled scope helper (avoids a hard ImRaii dependency).
@@ -162,6 +219,8 @@ public partial class MainWindow : Window
     }
 
     // ---- shared helpers available to every tab partial ----
+    // The Fancy UI kit (UiKit, Theme, ShellWindow) lives in MarketHelper.FancyUI; section
+    // headings are UiKit.Section(...). This file keeps only the HelpMarker pattern.
 
     /// <summary>Inline "(?)" tooltip marker using the proven SetTooltip pattern.</summary>
     private static void HelpMarker(string text)
@@ -209,26 +268,6 @@ public partial class MainWindow : Window
                 if (!string.IsNullOrEmpty(v) && !list.Contains(v)) { list.Add(v); Cfg.Save(); }
             }
         }
-        Dummy(2f);
-    }
-
-    /// <summary>A scaled separator with padding above and below.</summary>
-    private static void Divider()
-    {
-        Dummy(4f);
-        ImGui.Separator();
-        Dummy(4f);
-    }
-
-    /// <summary>
-    /// A labelled section heading with breathing room above it. Use this instead of bare dividers
-    /// so tabs read top-to-bottom as named sections rather than an undifferentiated widget pile.
-    /// </summary>
-    private static void SectionHeader(string text)
-    {
-        Dummy(8f);
-        ImGui.TextColored(Gold, text);
-        ImGui.Separator();
         Dummy(2f);
     }
 }

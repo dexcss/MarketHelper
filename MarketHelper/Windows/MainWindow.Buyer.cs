@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using Dalamud.Interface;
 using ECommons.DalamudServices;
 using Dalamud.Bindings.ImGui;
+using MarketHelper.FancyUI;
 using static MarketHelper.UiScale;
 
 namespace MarketHelper.Windows;
@@ -17,19 +19,19 @@ public partial class MainWindow
     private void DrawBuyerTab()
     {
         WrapText("Build a shopping list, press SCAN to find the cheapest listings in your chosen scope, then press SEND to go and buy them. Nothing is ever bought above the max price you set for that item.");
-        Dummy(6f);
+        Dummy(6);
 
-        SectionHeader("Shopping list");
+        UiKit.Section(FontAwesomeIcon.CartArrowDown, "shopping list");
         DrawBuyerAddRow();
-        Dummy(4f);
+        Dummy(4);
         DrawBuyerList();
 
         DrawMakePlaceImport();   // draws its own collapsing header
 
-        SectionHeader("Scan scope");
+        UiKit.Section(FontAwesomeIcon.Globe, "scan scope");
         DrawBuyerScope();
 
-        SectionHeader("Scan and buy");
+        UiKit.Section(FontAwesomeIcon.Play, "scan and buy");
         DrawBuyerActions();
 
         DrawBuyerSettings();     // draws its own collapsing header
@@ -340,13 +342,8 @@ public partial class MainWindow
             : $"{hereWorld} / {here} / {hereRegion}");
 
         var mode = Math.Clamp(Cfg.BuyerScopeMode, 0, 3);
-        if (ImGui.RadioButton("My world", ref mode, 0)) { Cfg.BuyerScopeMode = 0; Cfg.Save(); }
-        ImGui.SameLine();
-        if (ImGui.RadioButton("My Data Center", ref mode, 1)) { Cfg.BuyerScopeMode = 1; Cfg.Save(); }
-        ImGui.SameLine();
-        if (ImGui.RadioButton("My whole Region", ref mode, 2)) { Cfg.BuyerScopeMode = 2; Cfg.Save(); }
-        ImGui.SameLine();
-        if (ImGui.RadioButton("Custom", ref mode, 3)) { Cfg.BuyerScopeMode = 3; Cfg.Save(); }
+        var modeIdx = UiKit.Segmented("##fancy-bscope", new[] { "World", "DC", "Region", "Custom" }, mode);
+        if (modeIdx != mode) { Cfg.BuyerScopeMode = modeIdx; Cfg.Save(); }
         ImGui.SameLine(0, SW(6));
         HelpMarker("Where to look for listings. My world = no travel at all. My Data Center = anywhere you can visit freely. My whole Region = every DC you can reach, which means data-center transfers. Custom = tick exactly the DCs you want.");
 
@@ -522,57 +519,64 @@ public partial class MainWindow
         var buyer = _plugin.Buyer;
         var runner = _plugin.Buy;
 
-        var dry = Cfg.BuyerDryRun;
-        if (ImGui.Checkbox("Dry run (walk the route, buy nothing)", ref dry)) { Cfg.BuyerDryRun = dry; Cfg.Save(); }
+        var dry = UiKit.Toggle("##fancy-bdry", Cfg.BuyerDryRun);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextUnformatted("Dry run (walk the route, buy nothing)");
         ImGui.SameLine(0, SW(6));
         HelpMarker("ON by default. The Buyer travels, opens boards, reads live prices and reports exactly what it WOULD buy — without spending a gil. Leave this on for your first run on a new setup.");
+        if (dry != Cfg.BuyerDryRun) { Cfg.BuyerDryRun = dry; Cfg.Save(); }
 
-        Dummy(4f);
+        Dummy(4);
 
         using (ImRaiiDisabled(buyer.Scanning || runner.Running || Cfg.BuyerItems.Count == 0))
         {
-            if (ImGui.Button("SCAN", new Vector2(SW(120), SW(30))))
+            if (UiKit.GradientButton("##fancy-bscan", "SCAN", Theme.Accent, Theme.Muted, 36f))
             {
                 buyer.Scan();
                 _plugin.PlanWindow.IsOpen = true;
             }
         }
-        ImGui.SameLine(0, SW(10));
 
         var plan = buyer.Plan;
         using (ImRaiiDisabled(runner.Running || plan == null || !plan.HasWork))
         {
-            if (ImGui.Button("SEND", new Vector2(SW(160), SW(30))))
+            if (UiKit.GradientButton("##fancy-bsend", Cfg.BuyerDryRun ? "SEND (DRY RUN)" : "SEND — LIVE", Theme.Good, Theme.Accent, 40f))
             {
                 if (plan != null) runner.Start(plan, Cfg.BuyerDryRun);
             }
         }
         if (!Cfg.BuyerDryRun)
         {
-            ImGui.SameLine(0, SW(10));
-            ImGui.TextColored(Gold, "LIVE — will spend gil");
+            ImGui.SameLine(0, Theme.Gap);
+            UiKit.Chip("LIVE — will spend gil", Theme.Warn);
         }
+        else
+        {
+            ImGui.SameLine(0, Theme.Gap);
+            UiKit.Chip("DRY RUN", Theme.Muted);
+        }
+
         if (runner.IsPaused)
         {
-            ImGui.SameLine(0, SW(10));
-            if (ImGui.Button("RESUME##buyresume", new Vector2(SW(120), SW(30)))) runner.Resume();
+            ImGui.SameLine(0, Theme.Gap);
+            if (UiKit.ChipButton("##fancy-bresume", "RESUME")) runner.Resume();
         }
         else if (runner.Running)
         {
-            ImGui.SameLine(0, SW(10));
-            if (ImGui.Button("Pause##buypause", new Vector2(SW(80), SW(30)))) runner.PauseByUser();
+            ImGui.SameLine(0, Theme.Gap);
+            if (UiKit.ChipButton("##fancy-bpause", "PAUSE")) runner.PauseByUser();
         }
         if (runner.Running)
         {
-            ImGui.SameLine(0, SW(10));
-            if (ImGui.Button("Stop##buystop", new Vector2(SW(80), SW(30)))) runner.Stop();
+            ImGui.SameLine(0, Theme.Gap);
+            if (UiKit.ChipButton("##fancy-bstop", "STOP")) runner.Stop();
         }
 
-        Dummy(4f);
+        Dummy(4);
         if (plan != null)
         {
-            if (ImGui.Button("Show plan##buyshow", new Vector2(SW(120), 0))) _plugin.PlanWindow.IsOpen = true;
-            ImGui.SameLine(0, SW(8));
+            if (UiKit.ChipButton("##fancy-bplan", "SHOW PLAN")) _plugin.PlanWindow.IsOpen = true;
+            ImGui.SameLine(0, Theme.Gap);
         }
         ImGui.TextColored(buyer.Scanning ? Gold : Grey, buyer.Status);
         if (!string.IsNullOrEmpty(buyer.Error) && !buyer.Scanning)

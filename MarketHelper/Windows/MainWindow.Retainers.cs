@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using MarketHelper.FancyUI;
 using static MarketHelper.UiScale;
 
 namespace MarketHelper.Windows;
@@ -38,7 +39,7 @@ public partial class MainWindow
         // Manual pull: the auto-detect only runs during a run/reactive pricing, so before the
         // first run this list starts empty even though the game already knows the retainer names
         // (they're read from the market info proxy, which populates after any market board use).
-        if (ImGui.Button("Pull my retainers now", new Vector2(SW(180), 0)))
+        if (UiKit.ChipButton("##fancy-retpull", "PULL MY RETAINERS NOW", false, ImGui.GetContentRegionAvail().X))
         {
             var names = MarketData.GetMyRetainerNames();
             var added = 0;
