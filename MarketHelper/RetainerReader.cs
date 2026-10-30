@@ -106,10 +106,49 @@ public static unsafe class RetainerReader
     }
 
     /// <summary>
-    /// Like <see cref="FindItemSlot"/> but searches ONLY the open retainer's pages. The Lister must
-    /// use this: a market listing is made from retainer stock, and searching the player's four bags
-    /// first meant that carrying the same item yourself made the Lister target your bag slot (where
-    /// "Put Up for Sale" is not offered) and kept reporting "more stacks remain" forever.
+    /// Locate an item for LISTING: the open retainer's pages first, then the player's four bags.
+    ///
+    /// Retainer stock is preferred because it is the natural listing source and needs no fallback.
+    /// Bags are searched too because the game DOES offer "Put Up for Sale" on bag items while a
+    /// retainer's market screen is open at the summoning bell — AutoRetainer's quick-sell sells
+    /// from Inventory1-4 and the armory through the same context menu, and FFXIVClientStructs'
+    /// own AgentRetainer callback docs list "Put Up for Sale" as a standard entry. 1.17.9.0
+    /// searched retainer pages ONLY, which made every bag-stocked order skip silently.
+    /// </summary>
+    public static (InventoryType Type, ushort Slot)? FindListableItemSlot(uint itemId)
+        => FindRetainerItemSlot(itemId) ?? FindInBags(itemId);
+
+    /// <summary>Locate an item in the PLAYER's four main bags. Null when not held.</summary>
+    public static (InventoryType Type, ushort Slot)? FindInBags(uint itemId)
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return null;
+
+        foreach (var type in new[]
+                 {
+                     InventoryType.Inventory1, InventoryType.Inventory2,
+                     InventoryType.Inventory3, InventoryType.Inventory4,
+                 })
+        {
+            var inv = im->GetInventoryContainer(type);
+            if (inv == null || !inv->IsLoaded) continue;
+            for (var i = 0; i < inv->Size; i++)
+            {
+                var slot = inv->GetInventorySlot(i);
+                if (slot == null) continue;
+                if (slot->ItemId == itemId && slot->Quantity > 0)
+                    return (type, (ushort)i);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Like <see cref="FindItemSlot"/> but searches ONLY the open retainer's pages. Kept for
+    /// callers that must not touch player stock; the Lister itself uses
+    /// <see cref="FindListableItemSlot"/> (retainer first, then bags). NOTE: the earlier claim
+    /// that "Put Up for Sale" is not offered on bag slots was wrong — it is, at the bell, which
+    /// is exactly why the retainer-only lookup broke bag-stocked listing runs.
     /// </summary>
     public static (InventoryType Type, ushort Slot)? FindRetainerItemSlot(uint itemId)
     {

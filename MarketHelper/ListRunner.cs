@@ -15,8 +15,9 @@ public enum ListState
 
 /// <summary>
 /// Lists queued items on the market by walking the summoning bell. For each retainer it finds
-/// each queued item in inventory (player + this retainer), opens its sell window via the native
-/// RetainerItemCommand, prices it to undercut the market, and confirms.
+/// each queued item — in the open retainer's inventory first, then the player's bags (the game
+/// offers "Put Up for Sale" on bag items while a retainer's market screen is open at the bell) —
+/// opens its sell window via the item context menu, prices it to undercut the market, and confirms.
 ///
 /// DRY RUN by default: logs what it *would* list and the price, without opening/confirming.
 /// </summary>
@@ -54,6 +55,12 @@ public sealed class ListRunner
     private int _slotsLeft;
     private const int MaxListingsPerRetainer = 20;
 
+    // Run summary: stacks actually listed, and queued items never found in any inventory. The
+    // not-found case used to skip SILENTLY (a bare return), which is how 1.17.9.0 cycled nine
+    // retainers listing nothing without one explaining message.
+    private int _listedStacks;
+    private int _notFoundCount;
+
     // Dry-run only: items already "listed" in the preview, so they don't repeat per retainer.
     private readonly HashSet<uint> _dryListed = new();
 
@@ -90,6 +97,8 @@ public sealed class ListRunner
         _listedUnits.Clear();
         _lastListedUnits = 0;
         _retainerIdx = -1;
+        _listedStacks = 0;
+        _notFoundCount = 0;
         State = ListState.FindBell;
         Status = dryRun ? "Dry run: looking for bell..." : "Listing: looking for bell...";
         if (!dryRun)
@@ -113,6 +122,8 @@ public sealed class ListRunner
         _listedUnits.Clear();
         _lastListedUnits = 0;
         _ticks = 0;
+        _listedStacks = 0;
+        _notFoundCount = 0;
         // Build this retainer's queue and free-slot count, then enter the sell screen.
         _queue.Clear();
         _queue.AddRange(_plugin.AllListerItems());
@@ -191,6 +202,7 @@ public sealed class ListRunner
                     Log(remaining == 0
                         ? (DryRun ? "Dry run complete — all items accounted for." : "All items listed. Done.")
                         : (DryRun ? "Dry run complete." : "Finished (ran out of retainers with free slots)."));
+                    if (!DryRun) Log($"Run summary: listed {_listedStacks} stack(s){(_notFoundCount > 0 ? $"; {_notFoundCount} queued item(s) were never found in your bags or any retainer's inventory" : "")}.");
                     _ticks = 0;
                     State = ListState.WaitClosed;   // close the retainer window / bell, then stop
                     return;
@@ -307,7 +319,7 @@ public sealed class ListRunner
                     return;
                 }
 
-                var stacksRemain = RetainerReader.FindRetainerItemSlot(item) != null;
+                var stacksRemain = RetainerReader.FindListableItemSlot(item) != null;
                 if (!stacksRemain)
                 {
                     // Genuinely done with this item — nothing left in inventory.
@@ -344,9 +356,24 @@ public sealed class ListRunner
                 }
                 _currentItem = _queue[0];
                 _queue.RemoveAt(0);
-                _currentLoc = RetainerReader.FindRetainerItemSlot(_currentItem);
+                // Retainer stock first, then the player's bags. The game offers "Put Up for Sale"
+                // on bag items while a retainer's market screen is open at the bell (AutoRetainer's
+                // quick-sell does exactly this), so 1.17.9.0's retainer-only lookup was a
+                // regression: every bag-stocked order skipped with NO message and the run cycled
+                // every retainer listing nothing ("0/20 listed" with 49 items queued).
+                _currentLoc = RetainerReader.FindListableItemSlot(_currentItem);
                 if (_currentLoc == null)
-                    return; // not on this retainer/inventory; try next queued item
+                {
+                    // This used to be a bare `return` with no log — 49 invisible skips.
+                    Log($"{ItemSearch.FindById(_currentItem)}: not in this retainer's inventory or your bags — skipping (already listed, wrong id, or removed from the game?).");
+                    _notFoundCount++;
+                    return; // try the next queued item on the next tick
+                }
+                if (_currentLoc.Value.Type is InventoryType.Inventory1 or InventoryType.Inventory2
+                    or InventoryType.Inventory3 or InventoryType.Inventory4)
+                {
+                    Log($"{ItemSearch.FindById(_currentItem)}: listing from your bags (bag slot {_currentLoc.Value.Slot}).");
+                }
                 State = ListState.BeginSell;
                 break;
 
@@ -417,7 +444,7 @@ public sealed class ListRunner
                         Wait(700);
                         return; // wait for RetainerSell to open
                     }
-                    Log($"{ItemSearch.FindById(_currentItem)}: no 'Put Up for Sale' entry — skipping (nothing sold).");
+                    Log($"{ItemSearch.FindById(_currentItem)}: no 'Put Up for Sale' entry — skipping (nothing sold). Menu had: {Addons.DumpContextMenu()}");
                     Addons.CloseAddon("ContextMenu");
                     State = ListState.NextItem;
                     return;
@@ -642,6 +669,7 @@ public sealed class ListRunner
     private void AfterListed()
     {
         _slotsLeft--;
+        _listedStacks++;
         _listedUnits[_currentItem] = ListedSoFar(_currentItem) + Math.Max(1, _lastListedUnits);
         // Record the slot we just listed so the settle check can confirm it actually cleared before
         // we look for more stacks (listing moves the item out of inventory asynchronously).
