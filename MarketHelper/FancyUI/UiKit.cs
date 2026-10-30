@@ -51,11 +51,19 @@ public static class UiKit
 
     // ------------------------------------------------------------- headings
 
-    /// <summary>Small uppercase section label with a FontAwesome glyph.</summary>
+    /// <summary>
+    /// Small uppercase section label with a FontAwesome glyph, and a hairline rule underneath —
+    /// a short accent tick at the left, then a faint line across the content width — so sections
+    /// read as separate blocks (screenshot round 2: everything ran together without them).
+    /// </summary>
     public static void Section(FontAwesomeIcon icon, string text)
     {
         var s = Theme.UiScale;
-        ImGui.Dummy(new Vector2(0, 2f * s));
+        ImGui.Dummy(new Vector2(0, 4f * s));
+
+        // Capture the row's left edge and width before the items shift the cursor.
+        var rowX = ImGui.GetCursorScreenPos().X;
+        var rowW = ImGui.GetContentRegionAvail().X;
 
         ImGui.PushFont(UiBuilder.IconFont);
         ImGui.TextColored(Theme.Accent, icon.ToIconString());
@@ -63,7 +71,16 @@ public static class UiKit
 
         ImGui.SameLine(0, 6f * s);
         ImGui.TextColored(Theme.Muted, text.ToUpperInvariant());
-        ImGui.Dummy(new Vector2(0, 2f * s));
+
+        var textMax = ImGui.GetItemRectMax();
+        var lineY = textMax.Y + 5f * s;
+        var dl = ImGui.GetWindowDrawList();
+        dl.AddRectFilled(new Vector2(rowX, lineY), new Vector2(rowX + 18f * s, lineY + 1.5f * s),
+            Theme.U32(new Vector4(Theme.Accent.X, Theme.Accent.Y, Theme.Accent.Z, 0.85f)), 1f * s);
+        dl.AddRectFilled(new Vector2(rowX + 22f * s, lineY), new Vector2(rowX + rowW, lineY + 1f * s),
+            Theme.U32(new Vector4(Theme.Border.X, Theme.Border.Y, Theme.Border.Z, 0.55f)));
+
+        ImGui.Dummy(new Vector2(0, 7f * s));
     }
 
     // -------------------------------------------------------------- toggle
