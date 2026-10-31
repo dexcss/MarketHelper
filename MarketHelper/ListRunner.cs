@@ -10,7 +10,8 @@ namespace MarketHelper;
 public enum ListState
 {
     Idle, FindBell, InteractBell, WaitRetainerList, NextRetainer, SelectRetainer, WaitSelectString,
-    OpenInventory, NextItem, WaitStackSettle, BeginSell, WaitDryPrice, WaitSell, Price, WaitRealPrice, WaitClose, CloseRetainer, PostprocessBackout, WaitClosed, Done, Error,
+    OpenInventory, NextItem, WaitStackSettle, BeginSell, WaitDryPrice, WaitSell, Price, WaitRealPrice,
+    WaitManualPrice, WaitClose, CloseRetainer, PostprocessBackout, WaitClosed, Done, Error,
 }
 
 /// <summary>
@@ -85,6 +86,14 @@ public sealed class ListRunner
     // NavRunner got in 1.17.9.0.
     private int _priceGen;
 
+    // Rate-limit handling for the live-board pricing path (2026-11-01: a 37-item run fired a
+    // Compare Prices every ~2s, tripped the game's search limiter, and then burned ~25 items
+    // into "no market data" because WaitClose had no throttle check at all).
+    private int _throttleRetries;                 // retries for the CURRENT item
+    private const int MaxThrottleRetries = 5;
+    private double _throttleWaitUntil;            // absolute ms; Price refuses to fire before this
+    private double _lastSearchAt;                 // last Compare Prices fire, for min-gap pacing
+
     // AutoRetainer postprocess mode: AR already has the retainer open; list preset items on THIS
     // retainer only, then back out to SelectString and signal AR via the callback.
     private bool _postprocessMode;
@@ -107,6 +116,9 @@ public sealed class ListRunner
         _retainerIdx = -1;
         _listedStacks = 0;
         _notFoundCount = 0;
+        _throttleRetries = 0;
+        _lastSearchAt = 0;
+        _throttleWaitUntil = 0;
         State = ListState.FindBell;
         Status = dryRun ? "Dry run: looking for bell..." : "Listing: looking for bell...";
         if (!dryRun)
@@ -132,6 +144,9 @@ public sealed class ListRunner
         _ticks = 0;
         _listedStacks = 0;
         _notFoundCount = 0;
+        _throttleRetries = 0;
+        _lastSearchAt = 0;
+        _throttleWaitUntil = 0;
         // Build this retainer's queue and free-slot count, then enter the sell screen.
         _queue.Clear();
         _queue.AddRange(_plugin.AllListerItems());
@@ -159,6 +174,32 @@ public sealed class ListRunner
         if (_postprocessMode) { EndPostprocess(); return; }
         State = ListState.Idle;
         Status = "Stopped.";
+    }
+
+    /// <summary>True while paused for manual pricing (Resume / Skip item in the Lister tab).</summary>
+    public bool IsPaused => State == ListState.WaitManualPrice;
+
+    /// <summary>
+    /// Continue after a manual-pricing pause. The retainer's free-slot count is recounted — the
+    /// user may or may not have listed the item while the window was open.
+    /// </summary>
+    public void Resume()
+    {
+        if (State != ListState.WaitManualPrice) return;
+        Log("Resuming the run.");
+        _slotsLeft = Math.Max(0, MaxListingsPerRetainer - RetainerReader.ActiveMarketItems());
+        _throttleRetries = 0;
+        State = ListState.NextItem;
+    }
+
+    /// <summary>Close the sell window and move to the next item without listing this one. The
+    /// item stays queued for the next run.</summary>
+    public void SkipItem()
+    {
+        if (State != ListState.WaitManualPrice) return;
+        Log("Skipped — the item stays queued for the next run.");
+        Addons.CloseAddon("RetainerSell");
+        State = ListState.NextItem;
     }
 
     public void Tick()
@@ -417,6 +458,7 @@ public sealed class ListRunner
                     State = ListState.NextItem;
                     return;
                 }
+                _throttleRetries = 0;   // fresh item — its rate-limit retries start over
                 Wait(400);
                 _ticks = 0;
                 State = ListState.WaitSell;   // wait for ContextMenu, then pick "Put Up for Sale"
@@ -495,7 +537,18 @@ public sealed class ListRunner
                 //   DC / region  -> Universalis at that scope (board can't provide it)
                 if (Cfg.ListerPriceScope == 0)
                 {
+                    // Every Compare Prices is a real market search and the game rate-limits rapid
+                    // ones. Honour the throttle backoff window, then keep at least SearchPacingMs
+                    // between searches before firing.
+                    if (Now < _throttleWaitUntil) { Wait(200); return; }
+                    var sinceSearch = Now - _lastSearchAt;
+                    if (_lastSearchAt != 0 && sinceSearch < Cfg.SearchPacingMs)
+                    {
+                        Wait((int)Math.Min(Cfg.SearchPacingMs - sinceSearch, 2000));
+                        return;
+                    }
                     Addons.FireComparePrices();
+                    _lastSearchAt = Now;
                     Wait(1200);
                     _ticks = 0;
                     State = ListState.WaitClose;
@@ -537,36 +590,75 @@ public sealed class ListRunner
                     long price = _realPriceResult > 0 ? Math.Max(1, _realPriceResult - Cfg.ListerUndercutBy) : 0;
                     if (price <= 0)
                     {
-                        Log($"{name}: no {ScopeLabel()} market data — leaving sell window open for manual pricing.");
+                        Addons.CloseSearchWindows();
+                        EnterManualPrice($"no {ScopeLabel().ToLowerInvariant()} market data");
+                        return;
                     }
-                    else
+
+                    if (!ApplyStackSize(_currentItem, out var qDetailReal))
                     {
-                        if (!ApplyStackSize(_currentItem, out var qDetailReal))
-                        {
-                            Log($"{name}: {qDetailReal} — skipping rather than listing the wrong amount.");
-                            Addons.CloseAddon("RetainerSell");
-                            Addons.CloseSearchWindows();
-                            State = ListState.NextItem;
-                            return;
-                        }
-                        Addons.SetPriceAndConfirm((int)Math.Min(price, int.MaxValue));
-                        var extra = string.IsNullOrEmpty(_realPriceNote) ? "" : $" [{_realPriceNote}]";
-                        var qtyTagReal = string.IsNullOrEmpty(qDetailReal) ? "" : $" ({qDetailReal})";
-                        Log($"{name}: listed{qtyTagReal} at {price:N0}g ({ScopeLabel()} base {_realPriceResult:N0}){extra}.");
-                        _runPriceCache[_currentItem] = price;
-                        AfterListed();
+                        Log($"{name}: {qDetailReal} — skipping rather than listing the wrong amount.");
+                        Addons.CloseAddon("RetainerSell");
+                        Addons.CloseSearchWindows();
+                        State = ListState.NextItem;
+                        return;
                     }
+                    Addons.SetPriceAndConfirm((int)Math.Min(price, int.MaxValue));
+                    var extra = string.IsNullOrEmpty(_realPriceNote) ? "" : $" [{_realPriceNote}]";
+                    var qtyTagReal = string.IsNullOrEmpty(qDetailReal) ? "" : $" ({qDetailReal})";
+                    Log($"{name}: listed{qtyTagReal} at {price:N0}g ({ScopeLabel()} base {_realPriceResult:N0}){extra}.");
+                    _runPriceCache[_currentItem] = price;
+                    AfterListed();
+
                     Addons.CloseSearchWindows();
                     Wait(500);
                     State = ListState.WaitStackSettle;
+                    return;
                 }
                 Wait(100);
+                break;
+
+            case ListState.WaitManualPrice:
+                // Paused with the sell window open so the user can price this item by hand.
+                // When they Confirm (or cancel), the game closes RetainerSell — that's the
+                // signal to continue. Resume / Skip item come from the Lister tab.
+                if (Now < _deadline) return;
+                if (!Addons.Exists("RetainerSell"))
+                {
+                    Log("Sell window closed — continuing.");
+                    _slotsLeft = Math.Max(0, MaxListingsPerRetainer - RetainerReader.ActiveMarketItems());
+                    _throttleRetries = 0;
+                    State = ListState.NextItem;
+                    return;
+                }
+                Wait(250);
                 break;
 
             case ListState.WaitClose:
                 if (Now < _deadline) return;
                 _ticks++;
-                if (MarketData.ListingsReady() || _ticks > 60)
+
+                // The game rate-limits rapid searches: the proxy never populates and the results
+                // window shows "please wait...". Back off and re-fire for THIS item instead of
+                // burning it — the Undercut walk has done this since 1.17.9; the Lister was
+                // missing it entirely (2026-11-01: ~25 items failed in a row).
+                if (Addons.MarketSearchThrottled())
+                {
+                    _throttleRetries++;
+                    if (_throttleRetries <= MaxThrottleRetries)
+                    {
+                        Log($"{ItemSearch.FindById(_currentItem)}: the game is rate-limiting searches — backing off, retry {_throttleRetries}/{MaxThrottleRetries}...");
+                        Addons.CloseSearchWindows();
+                        _throttleWaitUntil = Now + 1500 + 750 * _throttleRetries;
+                        State = ListState.Price;   // Price honours the backoff, then re-fires
+                        return;
+                    }
+                    Addons.CloseSearchWindows();
+                    EnterManualPrice("still rate-limited after retries");
+                    return;
+                }
+
+                if (MarketData.ListingsReady() || _ticks > 150)
                 {
                     // Only trust the board when the proxy is actually showing OUR item. It keeps the
                     // previous item's rows resident after a new search starts, so without this the
@@ -581,29 +673,36 @@ public sealed class ListRunner
 
                     if (price <= 0)
                     {
-                        Log($"{name}: no market data — leaving sell window open for manual pricing.");
+                        Addons.CloseSearchWindows();
+                        EnterManualPrice("no market data");
+                        return;
                     }
-                    else
+
+                    if (!ApplyStackSize(_currentItem, out var qDetailBoard))
                     {
-                        if (!ApplyStackSize(_currentItem, out var qDetailBoard))
-                        {
-                            Log($"{name}: {qDetailBoard} — skipping rather than listing the wrong amount.");
-                            Addons.CloseAddon("RetainerSell");
-                            Addons.CloseSearchWindows();
-                            State = ListState.NextItem;
-                            return;
-                        }
-                        Addons.SetPriceAndConfirm((int)Math.Min(price, int.MaxValue));
-                        var extra = string.IsNullOrEmpty(note) ? "" : $" [{note}]";
-                        var qtyTagBoard = string.IsNullOrEmpty(qDetailBoard) ? "" : $" ({qDetailBoard})";
-                        Log($"{name}: listed{qtyTagBoard} at {price:N0}g (base {basePrice:N0}){extra}.");
-                        _runPriceCache[_currentItem] = price;
-                        AfterListed();
+                        Log($"{name}: {qDetailBoard} — skipping rather than listing the wrong amount.");
+                        Addons.CloseAddon("RetainerSell");
+                        Addons.CloseSearchWindows();
+                        State = ListState.NextItem;
+                        return;
                     }
+                    Addons.SetPriceAndConfirm((int)Math.Min(price, int.MaxValue));
+                    var extra = string.IsNullOrEmpty(note) ? "" : $" [{note}]";
+                    var qtyTagBoard = string.IsNullOrEmpty(qDetailBoard) ? "" : $" ({qDetailBoard})";
+                    Log($"{name}: listed{qtyTagBoard} at {price:N0}g (base {basePrice:N0}){extra}.");
+                    _runPriceCache[_currentItem] = price;
+                    AfterListed();
+
                     Addons.CloseSearchWindows();
                     Wait(500);
                     State = ListState.WaitStackSettle;
+                    return;
                 }
+
+                // NOTE: this Wait is load-bearing. Without it _ticks counts FRAMES and the old
+                // _ticks > 60 cap gave the search ~1 second — far shorter than the server round
+                // trip, which is what failed nearly every item in the 2026-11-01 run.
+                Wait(100);
                 break;
 
             case ListState.PostprocessBackout:
@@ -853,6 +952,29 @@ public sealed class ListRunner
     {
         State = ListState.Error; Status = msg; _plugin.Chat($"[Market Helper] {msg}");
         if (_postprocessMode) { var d = _onPostprocessDone; _postprocessMode = false; _onPostprocessDone = null; d?.Invoke(); }
+    }
+
+    /// <summary>
+    /// Automatic pricing gave up on this item: PAUSE with the sell window open so the user can
+    /// price it by hand. The old behaviour logged "leaving sell window open for manual pricing"
+    /// and immediately put the NEXT item into the same window — destroying every manual-pricing
+    /// chance but the last (2026-11-01 live run). In AutoRetainer mode we must not pause (AR is
+    /// blocked waiting on us), so there we close the window and skip instead.
+    /// </summary>
+    private void EnterManualPrice(string why)
+    {
+        var name = ItemSearch.FindById(_currentItem);
+        if (_postprocessMode)
+        {
+            Log($"{name}: {why} — AutoRetainer is waiting on this pass, so skipping (price it manually later).");
+            Addons.CloseAddon("RetainerSell");
+            State = ListState.NextItem;
+            return;
+        }
+        Log($"{name}: {why} — paused. Price it on the open window and Confirm (or close it), then Resume. Or press Skip item.");
+        _ticks = 0;
+        Wait(250);
+        State = ListState.WaitManualPrice;
     }
 
     /// <summary>

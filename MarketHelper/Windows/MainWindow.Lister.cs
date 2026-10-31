@@ -128,8 +128,19 @@ public partial class MainWindow
         var totalItems = _plugin.AllListerItems().Count;
         if (lr.Running)
         {
-            if (UiKit.GradientButton("##fancy-lstop", "STOP", Theme.Danger, Theme.Danger, 36f)) lr.Stop();
-            ImGui.SameLine(0, Theme.Gap);
+            if (lr.IsPaused)
+            {
+                if (UiKit.ChipButton("##fancy-lresume", "RESUME")) lr.Resume();
+                ImGui.SameLine(0, Theme.Gap);
+                if (UiKit.ChipButton("##fancy-lskip", "SKIP ITEM")) lr.SkipItem();
+                ImGui.SameLine(0, Theme.Gap);
+                if (UiKit.ChipButton("##fancy-lstop2", "STOP")) lr.Stop();
+            }
+            else
+            {
+                if (UiKit.GradientButton("##fancy-lstop", "STOP", Theme.Danger, Theme.Danger, 36f)) lr.Stop();
+                ImGui.SameLine(0, Theme.Gap);
+            }
             ImGui.TextColored(Gold, lr.Status);
         }
         else
